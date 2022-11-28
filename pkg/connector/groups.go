@@ -19,8 +19,8 @@ func (o *groupBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return groupResourceType
 }
 
-// List returns all the groups from the database as resource objects
-// Groups include the GroupTrait because they have the 'shape' of the well known Group type
+// List returns all the groups from the database as resource objects.
+// Groups include the GroupTrait because they have the 'shape' of the well known Group type.
 func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	groups, err := o.client.ListGroups(ctx)
 	if err != nil {
@@ -56,7 +56,7 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	return ret, "", nil, nil
 }
 
-// Entitlements returns a membership and admin entitlement
+// Entitlements returns a membership and admin entitlement.
 func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	var ret []*v2.Entitlement
 
@@ -83,7 +83,7 @@ func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	return ret, "", nil, nil
 }
 
-// Grants returns grant information for group administrators and members
+// Grants returns grant information for group administrators and members.
 func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	grp, err := o.client.GetGroup(ctx, resource.Id.Resource)
 	if err != nil {

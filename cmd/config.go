@@ -7,7 +7,7 @@ import (
 )
 
 // config defines the external configuration required for the connector to run.
-// You can add additional fields here and have them automatically mapped to any additional command line flags
+// You can add additional fields here and have them automatically mapped to any additional command line flags.
 type config struct {
 	cli.BaseConfig `mapstructure:",squash"` // Puts the base config options in the same place as the connector options
 }

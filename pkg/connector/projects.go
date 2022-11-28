@@ -162,7 +162,6 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 				Principal:   memberPrincipal,
 			})
 		}
-
 	}
 
 	return ret, "", nil, nil

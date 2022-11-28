@@ -41,17 +41,26 @@ type Project struct {
 	GroupAssignments []string
 }
 
-// This is a simple example client. While this client would normally be responsible for communicating with an upstream
+// Client is a simple example client. While this client would normally be responsible for communicating with an upstream.
 // API, for this demo the client is only working with in-memory data.
-type Client struct{}
+type Client struct {
+	db *database
+}
 
-// ListUsers returns all the users from the database
+func NewClient() *Client {
+	c := &Client{}
+	c.db = generateDB()
+
+	return c
+}
+
+// ListUsers returns all the users from the database.
 func (c *Client) ListUsers(ctx context.Context) ([]*User, error) {
 	log := ctxzap.Extract(ctx)
 
-	log.Info("listing users", zap.Int("user_count", len(db.Users)))
+	log.Info("listing users", zap.Int("user_count", len(c.db.Users)))
 
-	return db.Users, nil
+	return c.db.Users, nil
 }
 
 // GetUser returns the user requested if it exists, else returns an error.
@@ -70,13 +79,13 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	return nil, fmt.Errorf("user not found")
 }
 
-// ListGroups returns all the groups from the database
+// ListGroups returns all the groups from the database.
 func (c *Client) ListGroups(ctx context.Context) ([]*Group, error) {
 	log := ctxzap.Extract(ctx)
 
-	log.Info("listing groups", zap.Int("group_count", len(db.Groups)))
+	log.Info("listing groups", zap.Int("group_count", len(c.db.Groups)))
 
-	return db.Groups, nil
+	return c.db.Groups, nil
 }
 
 // GetGroup returns the group requested if it exists, else returns an error.
@@ -95,13 +104,13 @@ func (c *Client) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	return nil, fmt.Errorf("group not found")
 }
 
-// ListRoles returns all the roles from the database
+// ListRoles returns all the roles from the database.
 func (c *Client) ListRoles(ctx context.Context) ([]*Role, error) {
 	log := ctxzap.Extract(ctx)
 
-	log.Info("listing roles", zap.Int("role_count", len(db.Roles)))
+	log.Info("listing roles", zap.Int("role_count", len(c.db.Roles)))
 
-	return db.Roles, nil
+	return c.db.Roles, nil
 }
 
 // GetRole returns the role requested if it exists, else returns an error.
@@ -120,13 +129,13 @@ func (c *Client) GetRole(ctx context.Context, roleID string) (*Role, error) {
 	return nil, fmt.Errorf("role not found")
 }
 
-// ListProjects returns all the projects from the database
+// ListProjects returns all the projects from the database.
 func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 	log := ctxzap.Extract(ctx)
 
-	log.Info("listing projects", zap.Int("project_count", len(db.Roles)))
+	log.Info("listing projects", zap.Int("project_count", len(c.db.Roles)))
 
-	return db.Projects, nil
+	return c.db.Projects, nil
 }
 
 // GetProject returns the project requested if it exists, else returns an error.

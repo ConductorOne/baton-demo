@@ -7,10 +7,8 @@ type database struct {
 	Projects []*Project
 }
 
-var db *database
-
-func init() {
-	db = &database{}
+func generateDB() *database {
+	db := &database{}
 
 	db.Users = []*User{
 		{
@@ -105,4 +103,6 @@ func init() {
 			},
 		},
 	}
+
+	return db
 }

@@ -102,10 +102,6 @@ func (c *C1File) PutResource(ctx context.Context, resource *v2.Resource) error {
 		zap.String("resource_type_id", resource.Id.ResourceType),
 	)
 
-	if resource.Id == nil || resource.Id.ResourceType == "" || resource.Id.Resource == "" {
-		return fmt.Errorf("resources must have a valid ID set")
-	}
-
 	updateRecord := goqu.Record{
 		"resource_type_id": resource.Id.ResourceType,
 		"external_id":      resource.Id.Resource,

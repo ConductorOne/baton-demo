@@ -20,7 +20,7 @@ func (o *roleBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 // List returns all the roles from the database as resource objects
-// Roles include the role trait because they have the 'shape' of the well known Role type
+// Roles include the role trait because they have the 'shape' of the well known Role type.
 func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	roles, err := o.client.ListRoles(ctx)
 	if err != nil {
@@ -52,7 +52,7 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	return ret, "", nil, nil
 }
 
-// Entitlements returns an assignment entitlement
+// Entitlements returns an assignment entitlement.
 func (o *roleBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	var ret []*v2.Entitlement
 
@@ -158,7 +158,6 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 				Principal:   memberPrincipal,
 			})
 		}
-
 	}
 
 	return ret, "", nil, nil

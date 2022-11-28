@@ -43,10 +43,10 @@ func (d *Demo) Validate(ctx context.Context) (annotations.Annotations, error) {
 	return nil, nil
 }
 
-// New returns a new instance of the Demo connector
+// New returns a new instance of the Demo connector.
 func New(ctx context.Context) (*Demo, error) {
 	demo := &Demo{
-		client: &client.Client{},
+		client: client.NewClient(),
 	}
 
 	return demo, nil

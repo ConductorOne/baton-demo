@@ -117,7 +117,7 @@ github.com/aws/smithy-go/time
 github.com/aws/smithy-go/transport/http
 github.com/aws/smithy-go/transport/http/internal/io
 github.com/aws/smithy-go/waiter
-# github.com/conductorone/baton-sdk v0.0.7 => /Users/jirwin/projects/baton-sdk
+# github.com/conductorone/baton-sdk v0.0.8
 ## explicit; go 1.19
 github.com/conductorone/baton-sdk/internal/connector
 github.com/conductorone/baton-sdk/internal/dotc1z
@@ -438,4 +438,3 @@ modernc.org/memory
 # modernc.org/sqlite v1.19.2
 ## explicit; go 1.17
 modernc.org/sqlite/lib
-# github.com/conductorone/baton-sdk => /Users/jirwin/projects/baton-sdk
