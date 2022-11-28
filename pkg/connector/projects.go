@@ -19,6 +19,8 @@ func (o *projectBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return projectResourceType
 }
 
+// List returns all the projects from the database as resource objects
+// Projects don't include any traits because they don't match the 'shape' of any well known types.
 func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	projects, err := o.client.ListProjects(ctx)
 	if err != nil {

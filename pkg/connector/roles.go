@@ -19,7 +19,8 @@ func (o *roleBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return roleResourceType
 }
 
-// List returns a slice of resources, one for each role returned by the client
+// List returns all the roles from the database as resource objects
+// Roles include the role trait because they have the 'shape' of the well known Role type
 func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	roles, err := o.client.ListRoles(ctx)
 	if err != nil {

@@ -41,6 +41,8 @@ type Project struct {
 	GroupAssignments []string
 }
 
+// This is a simple example client. While this client would normally be responsible for communicating with an upstream
+// API, for this demo the client is only working with in-memory data.
 type Client struct{}
 
 // ListUsers returns all the users from the database

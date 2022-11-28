@@ -17,6 +17,10 @@ import (
 
 var version = "dev"
 
+// This is the primary entrypoint for the connector. It uses the SDK to standardize command line flags.
+// By using `cli.NewCmd()` from the SDK allows the SDK to be in charge of the lifecycle of your connector logic.
+// You are able to add additional flags and update the configuration in case your connector needs more input from the user
+// in order to run.
 func main() {
 	ctx := context.Background()
 
