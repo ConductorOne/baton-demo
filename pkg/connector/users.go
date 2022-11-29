@@ -28,24 +28,12 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var ret []*v2.Resource
 	for _, u := range users {
-		userTrait, err := sdk.NewUserTrait(u.Email, v2.UserTrait_Status_STATUS_ENABLED, nil, nil)
+		userResource, err := sdk.NewUserResource(u.Name, userResourceType, parentResourceID, u.Id, u.Email, nil)
 		if err != nil {
 			return nil, "", nil, err
 		}
 
-		var annos annotations.Annotations
-		annos.Append(userTrait)
-
-		resourceID, err := sdk.NewResourceID(userResourceType, parentResourceID, u.Id)
-		if err != nil {
-			return nil, "", nil, err
-		}
-
-		ret = append(ret, &v2.Resource{
-			Id:          resourceID,
-			DisplayName: u.Name,
-			Annotations: annos,
-		})
+		ret = append(ret, userResource)
 	}
 
 	return ret, "", nil, nil
