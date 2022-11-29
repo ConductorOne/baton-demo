@@ -11,6 +11,10 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/sdk"
 )
 
+var (
+	roleAssignmentEntitlement = "assignment"
+)
+
 type roleBuilder struct {
 	client *client.Client
 }
@@ -29,24 +33,11 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var ret []*v2.Resource
 	for _, r := range roles {
-		roleTrait, err := sdk.NewRoleTrait(nil)
+		role, err := sdk.NewRoleResource(r.Name, roleResourceType, parentResourceID, r.Id, nil)
 		if err != nil {
 			return nil, "", nil, err
 		}
-
-		var annos annotations.Annotations
-		annos.Append(roleTrait)
-
-		resourceID, err := sdk.NewResourceID(roleResourceType, parentResourceID, r.Id)
-		if err != nil {
-			return nil, "", nil, err
-		}
-
-		ret = append(ret, &v2.Resource{
-			Id:          resourceID,
-			DisplayName: r.Name,
-			Annotations: annos,
-		})
+		ret = append(ret, role)
 	}
 
 	return ret, "", nil, nil
@@ -54,22 +45,11 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 // Entitlements returns an assignment entitlement.
 func (o *roleBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	var ret []*v2.Entitlement
-
 	// This entitlement represents a User or Group being assigned the role
-	ret = append(ret, &v2.Entitlement{
-		Id:          sdk.NewEntitlementID(resource, "assignment"),
-		Resource:    resource,
-		DisplayName: "Assigned",
-		GrantableTo: []*v2.ResourceType{
-			userResourceType,  // Users can be directly assigned to the role
-			groupResourceType, // Groups can also be assigned to the role
-		},
-		Description: fmt.Sprintf("Is assigned the %s role", resource.DisplayName),
-		Slug:        "assigned", // Slug is a short name for the entitlement. This is often the same as display name.
-	})
+	assignment := sdk.NewAssignmentEntitlement(resource, roleAssignmentEntitlement, userResourceType, groupResourceType)
+	assignment.Description = fmt.Sprintf("Is assigned the %s role", resource.DisplayName)
 
-	return ret, "", nil, nil
+	return []*v2.Entitlement{assignment}, "", nil, nil
 }
 
 // Grants returns grants for the assigned entitlement. We will return a grant for each group that is assigned the role, in addition to a grant for every member of the group/
@@ -82,27 +62,14 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 	var ret []*v2.Grant
 
-	// Roles emit an assignment entitlement for themselves.
-	assignmentEntitlement := &v2.Entitlement{
-		Id:       sdk.NewEntitlementID(resource, "assignment"),
-		Resource: resource,
-	}
-
 	// Iterate direct assignments
 	for _, userID := range role.DirectAssignments {
 		pID, err := sdk.NewResourceID(userResourceType, nil, userID)
 		if err != nil {
 			return nil, "", nil, err
 		}
-		principal := &v2.Resource{
-			Id: pID,
-		}
 
-		ret = append(ret, &v2.Grant{
-			Id:          sdk.NewGrantID(assignmentEntitlement, principal),
-			Entitlement: assignmentEntitlement,
-			Principal:   principal,
-		})
+		ret = append(ret, sdk.NewGrant(resource, roleAssignmentEntitlement, pID))
 	}
 
 	// Iterate group assignments
@@ -111,15 +78,8 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 		if err != nil {
 			return nil, "", nil, err
 		}
-		principal := &v2.Resource{
-			Id: pID,
-		}
 
-		ret = append(ret, &v2.Grant{
-			Id:          sdk.NewGrantID(assignmentEntitlement, principal),
-			Entitlement: assignmentEntitlement,
-			Principal:   principal,
-		})
+		ret = append(ret, sdk.NewGrant(resource, roleAssignmentEntitlement, pID))
 
 		// Look up group and iterate its members
 		grp, err := o.client.GetGroup(ctx, grpID)
@@ -127,36 +87,14 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 			return nil, "", nil, err
 		}
 
-		for _, adminID := range grp.Admins {
-			adminPrincipalID, err := sdk.NewResourceID(userResourceType, nil, adminID)
+		// Grant all admins and members the assignment entitlement
+		for _, userID := range append(grp.Admins, grp.Members...) {
+			pID, err := sdk.NewResourceID(userResourceType, nil, userID)
 			if err != nil {
 				return nil, "", nil, err
 			}
-			adminPrincipal := &v2.Resource{
-				Id: adminPrincipalID,
-			}
 
-			ret = append(ret, &v2.Grant{
-				Id:          sdk.NewGrantID(assignmentEntitlement, adminPrincipal),
-				Entitlement: assignmentEntitlement,
-				Principal:   adminPrincipal,
-			})
-		}
-
-		for _, memberID := range grp.Members {
-			memberPrincipalID, err := sdk.NewResourceID(userResourceType, nil, memberID)
-			if err != nil {
-				return nil, "", nil, err
-			}
-			memberPrincipal := &v2.Resource{
-				Id: memberPrincipalID,
-			}
-
-			ret = append(ret, &v2.Grant{
-				Id:          sdk.NewGrantID(assignmentEntitlement, memberPrincipal),
-				Entitlement: assignmentEntitlement,
-				Principal:   memberPrincipal,
-			})
+			ret = append(ret, sdk.NewGrant(resource, roleAssignmentEntitlement, pID))
 		}
 	}
 
