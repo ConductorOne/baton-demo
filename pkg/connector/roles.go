@@ -64,7 +64,7 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 	// Iterate direct assignments
 	for _, userID := range role.DirectAssignments {
-		pID, err := sdk.NewResourceID(userResourceType, nil, userID)
+		pID, err := sdk.NewResourceID(userResourceType, userID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -74,7 +74,7 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 	// Iterate group assignments
 	for _, grpID := range role.GroupAssignments {
-		pID, err := sdk.NewResourceID(groupResourceType, nil, grpID)
+		pID, err := sdk.NewResourceID(groupResourceType, grpID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -89,7 +89,7 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 		// Grant all admins and members the assignment entitlement
 		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdk.NewResourceID(userResourceType, nil, userID)
+			pID, err := sdk.NewResourceID(userResourceType, userID)
 			if err != nil {
 				return nil, "", nil, err
 			}
