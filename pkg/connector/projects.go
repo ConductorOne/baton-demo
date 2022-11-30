@@ -67,7 +67,7 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 	var ret []*v2.Grant
 
 	// Grant the owner entitlement to the project owner
-	ownerID, err := sdk.NewResourceID(userResourceType, nil, project.Owner)
+	ownerID, err := sdk.NewResourceID(userResourceType, project.Owner)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -78,7 +78,7 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 
 	// Iterate group assignments
 	for _, grpID := range project.GroupAssignments {
-		pID, err := sdk.NewResourceID(groupResourceType, nil, grpID)
+		pID, err := sdk.NewResourceID(groupResourceType, grpID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -92,7 +92,7 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 		}
 
 		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdk.NewResourceID(userResourceType, nil, userID)
+			pID, err := sdk.NewResourceID(userResourceType, userID)
 			if err != nil {
 				return nil, "", nil, err
 			}

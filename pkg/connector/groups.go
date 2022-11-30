@@ -70,7 +70,7 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 	var ret []*v2.Grant
 
 	for _, adminID := range grp.Admins {
-		pID, err := sdk.NewResourceID(userResourceType, nil, adminID)
+		pID, err := sdk.NewResourceID(userResourceType, adminID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -81,7 +81,7 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 	}
 
 	for _, memberID := range grp.Members {
-		pID, err := sdk.NewResourceID(userResourceType, nil, memberID)
+		pID, err := sdk.NewResourceID(userResourceType, memberID)
 		if err != nil {
 			return nil, "", nil, err
 		}
