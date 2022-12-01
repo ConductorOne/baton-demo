@@ -58,7 +58,7 @@ func NewClient() *Client {
 func (c *Client) ListUsers(ctx context.Context) ([]*User, error) {
 	log := ctxzap.Extract(ctx)
 
-	log.Info("listing users", zap.Int("user_count", len(c.db.Users)))
+	log.Debug("listing users", zap.Int("user_count", len(c.db.Users)))
 
 	return c.db.Users, nil
 }
@@ -83,7 +83,7 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 func (c *Client) ListGroups(ctx context.Context) ([]*Group, error) {
 	log := ctxzap.Extract(ctx)
 
-	log.Info("listing groups", zap.Int("group_count", len(c.db.Groups)))
+	log.Debug("listing groups", zap.Int("group_count", len(c.db.Groups)))
 
 	return c.db.Groups, nil
 }
@@ -108,7 +108,7 @@ func (c *Client) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 func (c *Client) ListRoles(ctx context.Context) ([]*Role, error) {
 	log := ctxzap.Extract(ctx)
 
-	log.Info("listing roles", zap.Int("role_count", len(c.db.Roles)))
+	log.Debug("listing roles", zap.Int("role_count", len(c.db.Roles)))
 
 	return c.db.Roles, nil
 }
@@ -133,7 +133,7 @@ func (c *Client) GetRole(ctx context.Context, roleID string) (*Role, error) {
 func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 	log := ctxzap.Extract(ctx)
 
-	log.Info("listing projects", zap.Int("project_count", len(c.db.Roles)))
+	log.Debug("listing projects", zap.Int("project_count", len(c.db.Roles)))
 
 	return c.db.Projects, nil
 }
