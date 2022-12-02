@@ -4,7 +4,7 @@
 
 `baton-demo` is an example connector built using the [Baton SDK](https://github.com/conductorone/baton-sdk). It uses hardcoded data to provide a simple example of how to build your own connector with Baton.
 
-Check out [Baton](https://github.com/conductorone/baton) to learn more about Baton.
+Check out [Baton](https://github.com/conductorone/baton) to learn more about the project in general.
 
 # Getting Started
 ## brew
