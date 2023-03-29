@@ -8,7 +8,9 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	"github.com/conductorone/baton-sdk/pkg/sdk"
+	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
+	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
 var (
@@ -38,7 +40,13 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		profile := make(map[string]interface{})
 		profile["group_color"] = "green"
 
-		group, err := sdk.NewGroupResource(g.Name, groupResourceType, parentResourceID, g.Id, profile)
+		group, err := sdkResource.NewGroupResource(
+			g.Name,
+			groupResourceType,
+			g.Id,
+			[]sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(profile)},
+			sdkResource.WithParentResourceID(parentResourceID),
+		)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -51,10 +59,10 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 // Entitlements returns a membership and admin entitlement.
 func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	// This entitlement represents being a member of the group, and it can be granted to Users.
-	member := sdk.NewAssignmentEntitlement(resource, groupMemberEntitlement, userResourceType)
+	member := sdkEntitlement.NewAssignmentEntitlement(resource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	member.Description = fmt.Sprintf("Is a member of the %s group", resource.DisplayName)
 
-	admin := sdk.NewPermissionEntitlement(resource, groupAdminEntitlement, userResourceType)
+	admin := sdkEntitlement.NewPermissionEntitlement(resource, groupAdminEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	admin.Description = fmt.Sprintf("Is an admin of the %s group", resource.DisplayName)
 
 	return []*v2.Entitlement{member, admin}, "", nil, nil
@@ -70,23 +78,23 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 	var ret []*v2.Grant
 
 	for _, adminID := range grp.Admins {
-		pID, err := sdk.NewResourceID(userResourceType, adminID)
+		pID, err := sdkResource.NewResourceID(userResourceType, adminID)
 		if err != nil {
 			return nil, "", nil, err
 		}
 
 		// Each admin gets the admin entitlement in addition to the member entitlement
-		ret = append(ret, sdk.NewGrant(resource, groupAdminEntitlement, pID))
-		ret = append(ret, sdk.NewGrant(resource, groupMemberEntitlement, pID))
+		ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
+		ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
 	}
 
 	for _, memberID := range grp.Members {
-		pID, err := sdk.NewResourceID(userResourceType, memberID)
+		pID, err := sdkResource.NewResourceID(userResourceType, memberID)
 		if err != nil {
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdk.NewGrant(resource, groupMemberEntitlement, pID))
+		ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
 	}
 
 	return ret, "", nil, nil

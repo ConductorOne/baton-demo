@@ -7,7 +7,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	"github.com/conductorone/baton-sdk/pkg/sdk"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
 type userBuilder struct {
@@ -28,7 +28,9 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var ret []*v2.Resource
 	for _, u := range users {
-		userResource, err := sdk.NewUserResource(u.Name, userResourceType, parentResourceID, u.Id, u.Email, nil)
+		userResource, err := sdkResource.NewUserResource(u.Name, userResourceType, u.Id, []sdkResource.UserTraitOption{
+			sdkResource.WithEmail(u.Email, true),
+		}, sdkResource.WithParentResourceID(parentResourceID))
 		if err != nil {
 			return nil, "", nil, err
 		}
