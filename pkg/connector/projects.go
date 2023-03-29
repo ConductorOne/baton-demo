@@ -8,7 +8,9 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	"github.com/conductorone/baton-sdk/pkg/sdk"
+	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
+	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
 var (
@@ -34,7 +36,7 @@ func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.Resource
 
 	var ret []*v2.Resource
 	for _, p := range projects {
-		project, err := sdk.NewResource(p.Name, projectResourceType, parentResourceID, p.Id)
+		project, err := sdkResource.NewResource(p.Name, projectResourceType, p.Id, sdkResource.WithParentResourceID(parentResourceID))
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -48,10 +50,10 @@ func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.Resource
 //   - Ownership of the project, grantable to a user
 //   - Access to the project, grantable to groups
 func (o *projectBuilder) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	access := sdk.NewAssignmentEntitlement(resource, projectAccessEntitlement, groupResourceType, userResourceType)
+	access := sdkEntitlement.NewAssignmentEntitlement(resource, projectAccessEntitlement, sdkEntitlement.WithGrantableTo(groupResourceType, userResourceType))
 	access.Description = fmt.Sprintf("Has access to the %s project", resource.DisplayName)
 
-	owner := sdk.NewPermissionEntitlement(resource, projectOwnerEntitlement, userResourceType)
+	owner := sdkEntitlement.NewPermissionEntitlement(resource, projectOwnerEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	owner.Description = fmt.Sprintf("Is the owner of the %s project", resource.DisplayName)
 
 	return []*v2.Entitlement{access, owner}, "", nil, nil
@@ -67,23 +69,23 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 	var ret []*v2.Grant
 
 	// Grant the owner entitlement to the project owner
-	ownerID, err := sdk.NewResourceID(userResourceType, project.Owner)
+	ownerID, err := sdkResource.NewResourceID(userResourceType, project.Owner)
 	if err != nil {
 		return nil, "", nil, err
 	}
 
-	ret = append(ret, sdk.NewGrant(resource, projectOwnerEntitlement, ownerID))
+	ret = append(ret, sdkGrant.NewGrant(resource, projectOwnerEntitlement, ownerID))
 	// Owners also receive the access entitlement
-	ret = append(ret, sdk.NewGrant(resource, projectAccessEntitlement, ownerID))
+	ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, ownerID))
 
 	// Iterate group assignments
 	for _, grpID := range project.GroupAssignments {
-		pID, err := sdk.NewResourceID(groupResourceType, grpID)
+		pID, err := sdkResource.NewResourceID(groupResourceType, grpID)
 		if err != nil {
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdk.NewGrant(resource, projectAccessEntitlement, pID))
+		ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, pID))
 
 		// Look up group and iterate its members
 		grp, err := o.client.GetGroup(ctx, grpID)
@@ -92,12 +94,12 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 		}
 
 		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdk.NewResourceID(userResourceType, userID)
+			pID, err := sdkResource.NewResourceID(userResourceType, userID)
 			if err != nil {
 				return nil, "", nil, err
 			}
 
-			ret = append(ret, sdk.NewGrant(resource, projectAccessEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, pID))
 		}
 	}
 

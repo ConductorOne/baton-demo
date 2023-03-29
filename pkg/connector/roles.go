@@ -8,7 +8,9 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
-	"github.com/conductorone/baton-sdk/pkg/sdk"
+	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
+	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
 var (
@@ -33,7 +35,7 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var ret []*v2.Resource
 	for _, r := range roles {
-		role, err := sdk.NewRoleResource(r.Name, roleResourceType, parentResourceID, r.Id, nil)
+		role, err := sdkResource.NewRoleResource(r.Name, roleResourceType, r.Id, nil, sdkResource.WithParentResourceID(parentResourceID))
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -46,7 +48,7 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 // Entitlements returns an assignment entitlement.
 func (o *roleBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	// This entitlement represents a User or Group being assigned the role
-	assignment := sdk.NewAssignmentEntitlement(resource, roleAssignmentEntitlement, userResourceType, groupResourceType)
+	assignment := sdkEntitlement.NewAssignmentEntitlement(resource, roleAssignmentEntitlement, sdkEntitlement.WithGrantableTo(userResourceType, groupResourceType))
 	assignment.Description = fmt.Sprintf("Is assigned the %s role", resource.DisplayName)
 
 	return []*v2.Entitlement{assignment}, "", nil, nil
@@ -64,22 +66,22 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 	// Iterate direct assignments
 	for _, userID := range role.DirectAssignments {
-		pID, err := sdk.NewResourceID(userResourceType, userID)
+		pID, err := sdkResource.NewResourceID(userResourceType, userID)
 		if err != nil {
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdk.NewGrant(resource, roleAssignmentEntitlement, pID))
+		ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
 	}
 
 	// Iterate group assignments
 	for _, grpID := range role.GroupAssignments {
-		pID, err := sdk.NewResourceID(groupResourceType, grpID)
+		pID, err := sdkResource.NewResourceID(groupResourceType, grpID)
 		if err != nil {
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdk.NewGrant(resource, roleAssignmentEntitlement, pID))
+		ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
 
 		// Look up group and iterate its members
 		grp, err := o.client.GetGroup(ctx, grpID)
@@ -89,12 +91,12 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 		// Grant all admins and members the assignment entitlement
 		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdk.NewResourceID(userResourceType, userID)
+			pID, err := sdkResource.NewResourceID(userResourceType, userID)
 			if err != nil {
 				return nil, "", nil, err
 			}
 
-			ret = append(ret, sdk.NewGrant(resource, roleAssignmentEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
 		}
 	}
 
