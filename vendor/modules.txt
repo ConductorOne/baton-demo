@@ -118,17 +118,19 @@ github.com/aws/smithy-go/time
 github.com/aws/smithy-go/transport/http
 github.com/aws/smithy-go/transport/http/internal/io
 github.com/aws/smithy-go/waiter
-# github.com/conductorone/baton-sdk v0.0.26
+# github.com/conductorone/baton-sdk v0.0.26 => ../baton-sdk
 ## explicit; go 1.19
 github.com/conductorone/baton-sdk/internal/connector
 github.com/conductorone/baton-sdk/pb/c1/connector/v2
 github.com/conductorone/baton-sdk/pb/c1/connector_wrapper/v1
+github.com/conductorone/baton-sdk/pb/c1/connectorapi/service_mode/v1
 github.com/conductorone/baton-sdk/pb/c1/ratelimit/v1
 github.com/conductorone/baton-sdk/pb/c1/reader/v2
 github.com/conductorone/baton-sdk/pb/c1/utls/v1
 github.com/conductorone/baton-sdk/pkg/annotations
 github.com/conductorone/baton-sdk/pkg/cli
 github.com/conductorone/baton-sdk/pkg/connectorbuilder
+github.com/conductorone/baton-sdk/pkg/connectorrunner
 github.com/conductorone/baton-sdk/pkg/connectorstore
 github.com/conductorone/baton-sdk/pkg/dotc1z
 github.com/conductorone/baton-sdk/pkg/dotc1z/manager
@@ -139,6 +141,9 @@ github.com/conductorone/baton-sdk/pkg/pagination
 github.com/conductorone/baton-sdk/pkg/ratelimit
 github.com/conductorone/baton-sdk/pkg/sdk
 github.com/conductorone/baton-sdk/pkg/sync
+github.com/conductorone/baton-sdk/pkg/tasks
+github.com/conductorone/baton-sdk/pkg/tasks/c1_manager
+github.com/conductorone/baton-sdk/pkg/tasks/local_syncer
 github.com/conductorone/baton-sdk/pkg/types
 github.com/conductorone/baton-sdk/pkg/types/entitlement
 github.com/conductorone/baton-sdk/pkg/types/grant
@@ -233,6 +238,9 @@ github.com/pelletier/go-toml/v2/internal/characters
 github.com/pelletier/go-toml/v2/internal/danger
 github.com/pelletier/go-toml/v2/internal/tracker
 github.com/pelletier/go-toml/v2/unstable
+# github.com/pquerna/xjwt v0.1.0
+## explicit; go 1.16
+github.com/pquerna/xjwt
 # github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec
 ## explicit; go 1.12
 github.com/remyoudompheng/bigfft
@@ -288,14 +296,24 @@ go.uber.org/zap/internal/bufferpool
 go.uber.org/zap/internal/color
 go.uber.org/zap/internal/exit
 go.uber.org/zap/zapcore
+# golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e
+## explicit; go 1.17
+golang.org/x/crypto/ed25519
+golang.org/x/crypto/pbkdf2
 # golang.org/x/net v0.7.0
 ## explicit; go 1.17
+golang.org/x/net/context
+golang.org/x/net/context/ctxhttp
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
 golang.org/x/net/http2/hpack
 golang.org/x/net/idna
 golang.org/x/net/internal/timeseries
 golang.org/x/net/trace
+# golang.org/x/oauth2 v0.4.0
+## explicit; go 1.17
+golang.org/x/oauth2
+golang.org/x/oauth2/internal
 # golang.org/x/sys v0.5.0
 ## explicit; go 1.17
 golang.org/x/sys/internal/unsafeheader
@@ -308,6 +326,15 @@ golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
+# google.golang.org/appengine v1.6.7
+## explicit; go 1.11
+google.golang.org/appengine/internal
+google.golang.org/appengine/internal/base
+google.golang.org/appengine/internal/datastore
+google.golang.org/appengine/internal/log
+google.golang.org/appengine/internal/remote_api
+google.golang.org/appengine/internal/urlfetch
+google.golang.org/appengine/urlfetch
 # google.golang.org/genproto v0.0.0-20230221151758-ace64dc21148
 ## explicit; go 1.19
 google.golang.org/genproto/googleapis/rpc/status
@@ -394,12 +421,17 @@ google.golang.org/protobuf/runtime/protoimpl
 google.golang.org/protobuf/types/descriptorpb
 google.golang.org/protobuf/types/known/anypb
 google.golang.org/protobuf/types/known/durationpb
-google.golang.org/protobuf/types/known/emptypb
 google.golang.org/protobuf/types/known/structpb
 google.golang.org/protobuf/types/known/timestamppb
 # gopkg.in/ini.v1 v1.67.0
 ## explicit
 gopkg.in/ini.v1
+# gopkg.in/square/go-jose.v2 v2.6.0
+## explicit
+gopkg.in/square/go-jose.v2
+gopkg.in/square/go-jose.v2/cipher
+gopkg.in/square/go-jose.v2/json
+gopkg.in/square/go-jose.v2/jwt
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
@@ -440,3 +472,4 @@ modernc.org/memory
 # modernc.org/sqlite v1.20.4
 ## explicit; go 1.17
 modernc.org/sqlite/lib
+# github.com/conductorone/baton-sdk => ../baton-sdk

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"math/rand"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -60,7 +61,15 @@ func (c *Client) ListUsers(ctx context.Context) ([]*User, error) {
 
 	log.Debug("listing users", zap.Int("user_count", len(c.db.Users)))
 
-	return c.db.Users, nil
+	var ret []*User
+	for _, u := range c.db.Users {
+		ret = append(ret, &User{
+			Id:    u.Id,
+			Name:  fmt.Sprintf("%s+%d", u.Name, rand.Intn(10000)),
+			Email: u.Email,
+		})
+	}
+	return ret, nil
 }
 
 // GetUser returns the user requested if it exists, else returns an error.
