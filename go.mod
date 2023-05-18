@@ -3,7 +3,7 @@ module github.com/conductorone/baton-demo
 go 1.19
 
 require (
-	github.com/conductorone/baton-sdk v0.0.26
+	github.com/conductorone/baton-sdk v0.0.30
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0
 	go.uber.org/zap v1.24.0
 )

@@ -65,7 +65,17 @@ func run(ctx context.Context, cfg *config) error {
 		return err
 	}
 
-	r, err := sdk.NewConnectorRunner(ctx, c, cfg.C1zPath, sdk.WithSlidingMemoryLimiter(50))
+	opts := []sdk.Option{
+		sdk.WithSlidingMemoryLimiter(50),
+	}
+
+	if cfg.GrantEntitlementID != "" && cfg.GrantPrincipalID != "" && cfg.GrantPrincipalType != "" {
+		opts = append(opts, sdk.WithGrant(cfg.GrantEntitlementID, cfg.GrantPrincipalID, cfg.GrantEntitlementID))
+	} else if cfg.RevokeGrantID != "" {
+		opts = append(opts, sdk.WithRevoke(cfg.RevokeGrantID))
+	}
+
+	r, err := sdk.NewConnectorRunner(ctx, c, cfg.C1zPath, opts...)
 	if err != nil {
 		l.Error("error creating connector runner", zap.Error(err))
 		return err

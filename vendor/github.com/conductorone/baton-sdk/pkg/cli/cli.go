@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/conductorone/baton-sdk/internal/connector"
@@ -19,16 +20,19 @@ import (
 )
 
 const (
-	defaultConfigFilename = ".baton-%s"
-	envPrefix             = "baton"
-	defaultLogLevel       = "info"
-	defaultLogFormat      = logging.LogFormatJSON
+	envPrefix        = "baton"
+	defaultLogLevel  = "info"
+	defaultLogFormat = logging.LogFormatJSON
 )
 
 type BaseConfig struct {
-	LogLevel  string `mapstructure:"log-level"`
-	LogFormat string `mapstructure:"log-format"`
-	C1zPath   string `mapstructure:"file"`
+	LogLevel           string `mapstructure:"log-level"`
+	LogFormat          string `mapstructure:"log-format"`
+	C1zPath            string `mapstructure:"file"`
+	GrantEntitlementID string `mapstructure:"grant-entitlement"`
+	GrantPrincipalID   string `mapstructure:"grant-principal"`
+	GrantPrincipalType string `mapstructure:"grant-principal-type"`
+	RevokeGrantID      string `mapstructure:"revoke-grant"`
 }
 
 // NewCmd returns a new cobra command that will populate the provided config object, validate it, and run the provided run function.
@@ -44,7 +48,7 @@ func NewCmd[T any, PtrT *T](
 		Use:   name,
 		Short: name,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := loadConfig(name, cmd, cfg)
+			v, err := loadConfig(cmd, cfg)
 			if err != nil {
 				return err
 			}
@@ -68,7 +72,7 @@ func NewCmd[T any, PtrT *T](
 		Short:  "Start the connector service",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			v, err := loadConfig(name, cmd, cfg)
+			v, err := loadConfig(cmd, cfg)
 			if err != nil {
 				return err
 			}
@@ -135,16 +139,46 @@ func NewCmd[T any, PtrT *T](
 	cmd.PersistentFlags().String("log-level", defaultLogLevel, "The log level: debug, info, warn, error ($BATON_LOG_LEVEL)")
 	cmd.PersistentFlags().String("log-format", defaultLogFormat, "The output format for logs: json, console ($BATON_LOG_FORMAT)")
 	cmd.PersistentFlags().StringP("file", "f", "sync.c1z", "The path to the c1z file to sync with ($BATON_FILE)")
+	cmd.PersistentFlags().String("grant-entitlement", "", "The entitlement to grant to the supplied principal ($BATON_GRANT_ENTITLEMENT)")
+	cmd.PersistentFlags().String("grant-principal", "", "The resource to grant the entitlement to ($BATON_GRANT_PRINCIPAL)")
+	cmd.PersistentFlags().String("grant-principal-type", "", "The resource type of the principal to grant the entitlement to ($BATON_GRANT_PRINCIPAL_TYPE)")
+	cmd.MarkFlagsRequiredTogether("grant-entitlement", "grant-principal", "grant-principal-type")
 
+	cmd.PersistentFlags().String("revoke-grant", "", "The grant to revoke ($BATON_REVOKE_GRANT)")
+	cmd.MarkFlagsMutuallyExclusive("grant-entitlement", "revoke-grant")
 	return cmd, nil
 }
 
+func getConfigPath(customPath string) (string, string, error) {
+	if customPath != "" {
+		cfgDir, cfgFile := filepath.Split(filepath.Clean(customPath))
+		if cfgDir == "" {
+			cfgDir = "."
+		}
+
+		ext := filepath.Ext(cfgFile)
+		if ext != ".yaml" && ext != ".yml" {
+			return "", "", errors.New("expected config file to have .yaml or .yml extension")
+		}
+
+		return strings.TrimSuffix(cfgDir, string(filepath.Separator)), strings.TrimSuffix(cfgFile, ext), nil
+	}
+
+	return ".", ".baton", nil
+}
+
 // loadConfig sets viper up to parse the config into the provided configuration object.
-func loadConfig[T any, PtrT *T](name string, cmd *cobra.Command, cfg PtrT) (*viper.Viper, error) {
+func loadConfig[T any, PtrT *T](cmd *cobra.Command, cfg PtrT) (*viper.Viper, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
-	v.SetConfigName(fmt.Sprintf(defaultConfigFilename, name))
-	v.AddConfigPath(".")
+
+	cfgPath, cfgName, err := getConfigPath(os.Getenv("BATON_CONFIG_PATH"))
+	if err != nil {
+		return nil, err
+	}
+
+	v.SetConfigName(cfgName)
+	v.AddConfigPath(cfgPath)
 
 	if err := v.ReadInConfig(); err != nil {
 		if ok := !errors.Is(err, viper.ConfigFileNotFoundError{}); !ok {
