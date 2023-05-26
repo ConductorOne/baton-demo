@@ -34,6 +34,7 @@ func (d *Demo) Asset(ctx context.Context, asset *v2.AssetRef) (string, io.ReadCl
 func (d *Demo) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
 		DisplayName: "Demo",
+		Description: "A demo connector",
 	}, nil
 }
 
