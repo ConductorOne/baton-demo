@@ -3,14 +3,16 @@ package connector
 import (
 	"context"
 	"fmt"
+	"strings"
 
-	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+
+	"github.com/conductorone/baton-demo/pkg/client"
 )
 
 var (
@@ -91,6 +93,10 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 		// Grant all admins and members the assignment entitlement
 		for _, userID := range append(grp.Admins, grp.Members...) {
+			// FIXME(morgabra): What should we do here?
+			if strings.HasPrefix(userID, "group:") {
+				continue
+			}
 			pID, err := sdkResource.NewResourceID(userResourceType, userID)
 			if err != nil {
 				return nil, "", nil, err

@@ -46,8 +46,9 @@ func generateDB() *database {
 				"2IC0Wo34fcTerFEgWmyffXmfrW8", // Carol
 			},
 			Members: []string{
-				"2IC0Wn5oRQqVVn3COFl1O1zSzV6", // Alice
-				"2IC0WoNfqUPT7mgO4FOaViIxBrR", // Bob
+				"2IC0Wn5oRQqVVn3COFl1O1zSzV6",       // Alice
+				"2IC0WoNfqUPT7mgO4FOaViIxBrR",       // Bob
+				"group:2VJleiE6zMPoTHbKDjLC1zJkUir", // Expanded Engineers Group
 			},
 		},
 		{
@@ -57,6 +58,15 @@ func generateDB() *database {
 				"2IC0WoaHVvl2GIQppXQH0flK1yJ", // Frank
 			},
 			Members: []string{
+				"2IC0Wn7DaxV1xqDpdg7jJRiPtCp", // Dan
+			},
+		},
+		{
+			Id:     "2VJleiE6zMPoTHbKDjLC1zJkUir",
+			Name:   "Expanded Engineers",
+			Admins: []string{},
+			Members: []string{
+				"2IC0WoaHVvl2GIQppXQH0flK1yJ", // Frank
 				"2IC0Wn7DaxV1xqDpdg7jJRiPtCp", // Dan
 			},
 		},
