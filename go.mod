@@ -3,7 +3,7 @@ module github.com/conductorone/baton-demo
 go 1.20
 
 require (
-	github.com/conductorone/baton-sdk v0.1.0
+	github.com/conductorone/baton-sdk v0.1.5
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0
 	go.uber.org/zap v1.24.0
 )
@@ -68,6 +68,7 @@ require (
 	golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e // indirect
 	golang.org/x/net v0.7.0 // indirect
 	golang.org/x/oauth2 v0.4.0 // indirect
+	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/sys v0.6.0 // indirect
 	golang.org/x/term v0.5.0 // indirect
 	golang.org/x/text v0.7.0 // indirect
