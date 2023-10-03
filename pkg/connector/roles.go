@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+
+	"github.com/conductorone/baton-demo/pkg/client"
 )
 
 var (
@@ -81,23 +82,15 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
-
-		// Look up group and iterate its members
-		grp, err := o.client.GetGroup(ctx, grpID)
-		if err != nil {
-			return nil, "", nil, err
+		expandAnno := &v2.GrantExpandable{
+			EntitlementIds: []string{
+				fmt.Sprintf("group:%s:member", grpID),
+				fmt.Sprintf("group:%s:admin", grpID),
+			},
+			Shallow: true,
 		}
 
-		// Grant all admins and members the assignment entitlement
-		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdkResource.NewResourceID(userResourceType, userID)
-			if err != nil {
-				return nil, "", nil, err
-			}
-
-			ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
-		}
+		ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID, sdkGrant.WithAnnotation(expandAnno)))
 	}
 
 	return ret, "", nil, nil
