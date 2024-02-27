@@ -3,12 +3,14 @@ module github.com/conductorone/baton-demo
 go 1.20
 
 require (
-	github.com/conductorone/baton-sdk v0.1.18
+	github.com/conductorone/baton-sdk v0.1.26
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	go.uber.org/zap v1.26.0
 )
 
 require (
+	filippo.io/age v1.1.1 // indirect
+	filippo.io/edwards25519 v1.0.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.23.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.5.1 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.25.3 // indirect
