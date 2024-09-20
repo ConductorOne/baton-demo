@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-
 	"github.com/conductorone/baton-sdk/pkg/cli"
 )
 
@@ -10,6 +9,9 @@ import (
 // You can add additional fields here and have them automatically mapped to any additional command line flags.
 type config struct {
 	cli.BaseConfig `mapstructure:",squash"` // Puts the base config options in the same place as the connector options
+
+	DBFile string `mapstructure:"db-file"`
+	InitDB bool   `mapstructure:"init-db"`
 }
 
 // validateConfig is run after the configuration is loaded, and should return an error if it isn't valid.

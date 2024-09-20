@@ -2,12 +2,11 @@ package connector
 
 import (
 	"context"
-	"io"
-
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"io"
 )
 
 type Demo struct {
@@ -44,10 +43,18 @@ func (d *Demo) Validate(ctx context.Context) (annotations.Annotations, error) {
 	return nil, nil
 }
 
+func (d *Demo) Close() error {
+	return d.client.Close()
+}
+
 // New returns a new instance of the Demo connector.
-func New(ctx context.Context) (*Demo, error) {
+func New(ctx context.Context, dbFileName string, initDB bool) (*Demo, error) {
+	cli, err := client.NewClient(dbFileName, initDB)
+	if err != nil {
+		return nil, err
+	}
 	demo := &Demo{
-		client: client.NewClient(),
+		client: cli,
 	}
 
 	return demo, nil

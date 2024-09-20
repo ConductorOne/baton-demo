@@ -3,7 +3,6 @@ package connector
 import (
 	"context"
 	"fmt"
-
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -101,6 +100,42 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 	}
 
 	return ret, "", nil, nil
+}
+
+func (o *roleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	if principal.Id.ResourceType != userResourceType.Id {
+		return nil, nil, fmt.Errorf("baton-postgres: only users can have roles granted")
+	}
+
+	role := entitlement.Resource.Id.Resource
+	userID := principal.Id.Resource
+
+	switch entitlement.Resource.Id.ResourceType {
+	case roleResourceType.Id:
+		err := o.client.GrantRole(ctx, userID, role)
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, nil, nil
+	default:
+		return nil, nil, fmt.Errorf("baton-demo: unknown resource type")
+	}
+}
+
+func (o *roleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	role := grant.Entitlement.Resource.Id.Resource
+	userID := grant.Principal.Id.Resource
+
+	switch grant.Entitlement.Resource.Id.ResourceType {
+	case roleResourceType.Id:
+		err := o.client.RevokeRole(ctx, userID, role)
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("baton-demo: unknown resource type")
+	}
 }
 
 func newRoleBuilder(client *client.Client) *roleBuilder {

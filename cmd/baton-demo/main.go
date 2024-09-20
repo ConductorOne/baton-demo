@@ -31,6 +31,18 @@ func main() {
 	}
 	cmd.Version = version
 
+	cmd.PersistentFlags().String(
+		"db-file",
+		"",
+		"A file to which the database will be written ($BATON_DB_FILE)\nexample: /path/to/dbfile.db",
+	)
+
+	cmd.PersistentFlags().Bool(
+		"init-db",
+		false,
+		"Whether to initialize the database ($BATON_INIT_DB)\nexample: true",
+	)
+
 	err = cmd.Execute()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -40,7 +52,7 @@ func main() {
 
 func getConnector(ctx context.Context, cfg *config) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
-	cb, err := connector.New(ctx)
+	cb, err := connector.New(ctx, cfg.DBFile, cfg.InitDB)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err

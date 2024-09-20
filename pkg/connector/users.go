@@ -2,10 +2,12 @@ package connector
 
 import (
 	"context"
-
+	"fmt"
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
@@ -49,6 +51,88 @@ func (o *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *
 // Grants always returns an empty slice for users since they don't have any entitlements.
 func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	return nil, "", nil, nil
+}
+
+func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, credentialOptions *v2.CredentialOptions) ([]*v2.PlaintextData, annotations.Annotations, error) {
+	if resourceId.ResourceType != roleResourceType.Id {
+		return nil, nil, fmt.Errorf("baton-postgres: non-role/user resource passed to rotate credentials")
+	}
+
+	pgRole, err := o.client.GetRole(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	plainTextPassword, err := crypto.GeneratePassword(credentialOptions)
+	if err != nil {
+		return nil, nil, err
+	}
+	ptd := &v2.PlaintextData{
+		Name:  "password",
+		Bytes: []byte(plainTextPassword),
+	}
+
+	err = o.client.ChangePassword(ctx, pgRole.Name, plainTextPassword)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return []*v2.PlaintextData{ptd}, nil, nil
+}
+
+func (o *userBuilder) makeResource(ctx context.Context, user *client.User) (*v2.Resource, error) {
+	return sdkResource.NewUserResource(user.Name, userResourceType, user.Id, nil)
+}
+
+func (o *userBuilder) CreateAccount(ctx context.Context, accountInfo *v2.AccountInfo, credentialOptions *v2.CredentialOptions) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
+	plainTextPassword, err := crypto.GeneratePassword(credentialOptions)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ptd := &v2.PlaintextData{
+		Name:  "password",
+		Bytes: []byte(plainTextPassword),
+	}
+
+	createdUser, err := o.client.CreateUser(ctx, accountInfo.Login, accountInfo.Emails[0].String(), plainTextPassword)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	resource, err := o.makeResource(ctx, createdUser)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return &v2.CreateAccountResponse_SuccessResult{
+		Resource: resource,
+	}, []*v2.PlaintextData{ptd}, nil, nil
+}
+
+func (o *userBuilder) Create(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
+	return nil, nil, fmt.Errorf("baton-demo: role creation not supported")
+}
+
+func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
+	if resourceId.ResourceType != userResourceType.Id {
+		return nil, fmt.Errorf("baton-demo: non-user resource passed to role delete")
+	}
+
+	pgRole, err := o.client.GetUser(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, err
+	}
+
+	err = o.client.DeleteUser(ctx, pgRole.Name)
+	return nil, err
+}
+
+func (o *userBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	return nil, nil, nil
+}
+
+func (o *userBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	return nil, nil
 }
 
 func newUserBuilder(client *client.Client) *userBuilder {
