@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/doug-martin/goqu/v9"
-	"github.com/segmentio/ksuid"
 	"log"
 	"strings"
+
+	"github.com/doug-martin/goqu/v9"
+	"github.com/segmentio/ksuid"
+
 	// NOTE: required to register the dialect for goqu.
 	//
 	// If you remove this import, goqu.Dialect("sqlite3") will
@@ -75,12 +77,10 @@ func NewClient(dbFileName string, initDB bool) (*Client, error) {
 	c.db = db
 	c.rawDB = rawDB
 
-	if initDB {
-		err = c.initDB()
-		if err != nil {
-			log.Fatal(err)
-			return nil, err
-		}
+	err = c.initDB(initDB)
+	if err != nil {
+		log.Fatal(err)
+		return nil, err
 	}
 
 	return c, nil
@@ -98,11 +98,13 @@ func (c *Client) validateDB() error {
 	return nil
 }
 
-func (c *Client) initDB() error {
+func (c *Client) initDB(initDB bool) error {
 	err := c.validateDB()
 	if err != nil {
 		return err
 	}
+
+	// ensure all schemas exist
 	for _, t := range allTableDescriptors {
 		query, args := t.Schema()
 
@@ -112,105 +114,107 @@ func (c *Client) initDB() error {
 		}
 	}
 
-	seedData := generateDB()
-	err = c.db.WithTx(func(tx *goqu.TxDatabase) error {
-		baseUserQ := tx.Insert(users.Name()).Prepared(true)
-		baseUserQ = baseUserQ.OnConflict(goqu.DoNothing())
-		for _, user := range seedData.Users {
-			query, args, err := baseUserQ.Rows(goqu.Record{
-				"id":    user.Id,
-				"name":  user.Name,
-				"email": user.Email,
-			}).ToSQL()
-			if err != nil {
-				return err
+	if initDB {
+		seedData := generateDB()
+		err = c.db.WithTx(func(tx *goqu.TxDatabase) error {
+			baseUserQ := tx.Insert(users.Name()).Prepared(true)
+			baseUserQ = baseUserQ.OnConflict(goqu.DoNothing())
+			for _, user := range seedData.Users {
+				query, args, err := baseUserQ.Rows(goqu.Record{
+					"id":    user.Id,
+					"name":  user.Name,
+					"email": user.Email,
+				}).ToSQL()
+				if err != nil {
+					return err
+				}
+
+				_, err = tx.Exec(query, args...)
+				if err != nil {
+					return err
+				}
 			}
 
-			_, err = tx.Exec(query, args...)
-			if err != nil {
-				return err
+			baseGroupQ := tx.Insert(groups.Name()).Prepared(true)
+			baseGroupQ = baseGroupQ.OnConflict(goqu.DoNothing())
+			for _, group := range seedData.Groups {
+				query, args, err := baseGroupQ.Rows(goqu.Record{
+					"id":      group.Id,
+					"name":    group.Name,
+					"admins":  strings.Join(group.Admins, ","),
+					"members": strings.Join(group.Members, ","),
+				}).ToSQL()
+				if err != nil {
+					return err
+				}
+
+				_, err = tx.Exec(query, args...)
+				if err != nil {
+					return err
+				}
 			}
+
+			baseRoleQ := tx.Insert(roles.Name()).Prepared(true)
+			baseRoleQ = baseRoleQ.OnConflict(goqu.DoNothing())
+			for _, role := range seedData.Roles {
+				query, args, err := baseRoleQ.Rows(goqu.Record{
+					"id":                 role.Id,
+					"name":               role.Name,
+					"direct_assignments": strings.Join(role.DirectAssignments, ","),
+					"group_assignments":  strings.Join(role.GroupAssignments, ","),
+				}).ToSQL()
+				if err != nil {
+					return err
+				}
+
+				_, err = tx.Exec(query, args...)
+				if err != nil {
+					return err
+				}
+			}
+
+			baseProjectQ := tx.Insert(projects.Name()).Prepared(true)
+			baseProjectQ = baseProjectQ.OnConflict(goqu.DoNothing())
+			for _, project := range seedData.Projects {
+				query, args, err := baseProjectQ.Rows(goqu.Record{
+					"id":                project.Id,
+					"name":              project.Name,
+					"owner":             project.Owner,
+					"group_assignments": strings.Join(project.GroupAssignments, ","),
+				}).ToSQL()
+				if err != nil {
+					return err
+				}
+
+				_, err = tx.Exec(query, args...)
+				if err != nil {
+					return err
+				}
+			}
+
+			basePasswordQ := tx.Insert(passwords.Name()).Prepared(true)
+			basePasswordQ = basePasswordQ.OnConflict(goqu.DoNothing())
+			for userID, password := range seedData.Passwords {
+				query, args, err := basePasswordQ.Rows(goqu.Record{
+					"id":       ksuid.New().String(),
+					"user_id":  userID,
+					"password": password,
+				}).ToSQL()
+				if err != nil {
+					return err
+				}
+
+				_, err = tx.Exec(query, args...)
+				if err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-
-		baseGroupQ := tx.Insert(groups.Name()).Prepared(true)
-		baseGroupQ = baseGroupQ.OnConflict(goqu.DoNothing())
-		for _, group := range seedData.Groups {
-			query, args, err := baseGroupQ.Rows(goqu.Record{
-				"id":      group.Id,
-				"name":    group.Name,
-				"admins":  strings.Join(group.Admins, ","),
-				"members": strings.Join(group.Members, ","),
-			}).ToSQL()
-			if err != nil {
-				return err
-			}
-
-			_, err = tx.Exec(query, args...)
-			if err != nil {
-				return err
-			}
-		}
-
-		baseRoleQ := tx.Insert(roles.Name()).Prepared(true)
-		baseRoleQ = baseRoleQ.OnConflict(goqu.DoNothing())
-		for _, role := range seedData.Roles {
-			query, args, err := baseRoleQ.Rows(goqu.Record{
-				"id":                 role.Id,
-				"name":               role.Name,
-				"direct_assignments": strings.Join(role.DirectAssignments, ","),
-				"group_assignments":  strings.Join(role.GroupAssignments, ","),
-			}).ToSQL()
-			if err != nil {
-				return err
-			}
-
-			_, err = tx.Exec(query, args...)
-			if err != nil {
-				return err
-			}
-		}
-
-		baseProjectQ := tx.Insert(projects.Name()).Prepared(true)
-		baseProjectQ = baseProjectQ.OnConflict(goqu.DoNothing())
-		for _, project := range seedData.Projects {
-			query, args, err := baseProjectQ.Rows(goqu.Record{
-				"id":                project.Id,
-				"name":              project.Name,
-				"owner":             project.Owner,
-				"group_assignments": strings.Join(project.GroupAssignments, ","),
-			}).ToSQL()
-			if err != nil {
-				return err
-			}
-
-			_, err = tx.Exec(query, args...)
-			if err != nil {
-				return err
-			}
-		}
-
-		basePasswordQ := tx.Insert(passwords.Name()).Prepared(true)
-		basePasswordQ = basePasswordQ.OnConflict(goqu.DoNothing())
-		for userID, password := range seedData.Passwords {
-			query, args, err := basePasswordQ.Rows(goqu.Record{
-				"id":       ksuid.New().String(),
-				"user_id":  userID,
-				"password": password,
-			}).ToSQL()
-			if err != nil {
-				return err
-			}
-
-			_, err = tx.Exec(query, args...)
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 
 	return nil
@@ -796,7 +800,6 @@ func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 		return nil, err
 	}
 
-	fmt.Println("********** QUERY **********", query)
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

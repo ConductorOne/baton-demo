@@ -2,11 +2,12 @@ package connector
 
 import (
 	"context"
+	"io"
+
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
-	"io"
 )
 
 type Demo struct {
