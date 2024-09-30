@@ -85,7 +85,11 @@ func (o *userBuilder) makeResource(ctx context.Context, user *client.User) (*v2.
 	return sdkResource.NewUserResource(user.Name, userResourceType, user.Id, nil)
 }
 
-func (o *userBuilder) CreateAccount(ctx context.Context, accountInfo *v2.AccountInfo, credentialOptions *v2.CredentialOptions) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
+func (o *userBuilder) CreateAccount(
+	ctx context.Context,
+	accountInfo *v2.AccountInfo,
+	credentialOptions *v2.CredentialOptions,
+) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
 	plainTextPassword, err := crypto.GeneratePassword(credentialOptions)
 	if err != nil {
 		return nil, nil, nil, err
