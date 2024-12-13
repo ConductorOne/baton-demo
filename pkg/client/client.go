@@ -349,6 +349,9 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 	}
 
 	_, err = c.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
 	return user, nil
 }
 
