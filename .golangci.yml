@@ -53,6 +53,8 @@ linters-settings:
   varcheck:
     exported-fields: false # this appears to improperly detect exported variables as unused when they are used from a package with the same name
 
+run:
+  output-format: colored-line-number
 
 linters:
   disable-all: true
@@ -70,9 +72,7 @@ linters:
     - bodyclose # checks whether HTTP response body is closed successfully
     - durationcheck # check for two durations multiplied together
     - errorlint # errorlint is a linter for that can be used to find code that will cause problems with the error wrapping scheme introduced in Go 1.13.
-    - execinquery # execinquery is a linter about query string checker in Query function which reads your Go src files and warning it finds
     - exhaustive # check exhaustiveness of enum switch statements
-    - exportloopref # checks for pointers to enclosing loop variables
     - forbidigo # Forbids identifiers
     - gochecknoinits # Checks that no init functions are present in Go code
     - goconst # Finds repeated strings that could be replaced by a constant
