@@ -336,6 +336,19 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 	if err != nil {
 		return nil, err
 	}
+
+	passwordQ := c.db.Update(passwords.Name()).Prepared(true)
+	passwordQ = passwordQ.Set(goqu.Record{
+		"password": password,
+	})
+	passwordQ = passwordQ.Where(goqu.C("user_id").Eq(user.Id))
+
+	query, args, err = passwordQ.ToSQL()
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = c.db.ExecContext(ctx, query, args...)
 	return user, nil
 }
 

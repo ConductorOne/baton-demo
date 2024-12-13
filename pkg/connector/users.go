@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -54,26 +56,37 @@ func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 	return nil, "", nil, nil
 }
 
+func (r *userBuilder) RotateCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsCredentialRotation, annotations.Annotations, error) {
+	return &v2.CredentialDetailsCredentialRotation{
+		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD, v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD},
+		PreferredCredentialOption:  v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+	}, nil, nil
+}
+
 func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, credentialOptions *v2.CredentialOptions) ([]*v2.PlaintextData, annotations.Annotations, error) {
 	if resourceId.ResourceType != roleResourceType.Id {
 		return nil, nil, fmt.Errorf("baton-postgres: non-role/user resource passed to rotate credentials")
 	}
 
-	pgRole, err := o.client.GetRole(ctx, resourceId.Resource)
+	user, err := o.client.GetUser(ctx, resourceId.Resource)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	plainTextPassword, err := crypto.GeneratePassword(credentialOptions)
-	if err != nil {
-		return nil, nil, err
-	}
-	ptd := &v2.PlaintextData{
-		Name:  "password",
-		Bytes: []byte(plainTextPassword),
+	var plainTextPassword string
+	var ptd *v2.PlaintextData
+	if credentialOptions.GetRandomPassword() != nil {
+		plainTextPassword, err = crypto.GeneratePassword(credentialOptions)
+		if err != nil {
+			return nil, nil, err
+		}
+		ptd = &v2.PlaintextData{
+			Name:  "password",
+			Bytes: []byte(plainTextPassword),
+		}
 	}
 
-	err = o.client.ChangePassword(ctx, pgRole.Name, plainTextPassword)
+	err = o.client.ChangePassword(ctx, user.Id, plainTextPassword)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -85,18 +98,34 @@ func (o *userBuilder) makeResource(ctx context.Context, user *client.User) (*v2.
 	return sdkResource.NewUserResource(user.Name, userResourceType, user.Id, nil)
 }
 
+func (o *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
+	return &v2.CredentialDetailsAccountProvisioning{
+		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD, v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD},
+		PreferredCredentialOption:  v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+	}, nil, nil
+}
+
 func (o *userBuilder) CreateAccount(
 	ctx context.Context,
 	accountInfo *v2.AccountInfo,
 	credentialOptions *v2.CredentialOptions,
 ) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
-	plainTextPassword, err := crypto.GeneratePassword(credentialOptions)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	ptd := &v2.PlaintextData{
-		Name:  "password",
-		Bytes: []byte(plainTextPassword),
+	l := ctxzap.Extract(ctx)
+	var plainTextPassword string
+	var err error
+	var ptd *v2.PlaintextData
+	if credentialOptions.GetRandomPassword() != nil {
+		l.Info("Generating random password")
+		plainTextPassword, err = crypto.GeneratePassword(credentialOptions)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		ptd = &v2.PlaintextData{
+			Name:  "password",
+			Bytes: []byte(plainTextPassword),
+		}
+	} else {
+		l.Info("No password generated")
 	}
 
 	createdUser, err := o.client.CreateUser(ctx, accountInfo.Login, accountInfo.Emails[0].String(), plainTextPassword)

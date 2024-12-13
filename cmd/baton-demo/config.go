@@ -1,21 +1,16 @@
 package main
 
 import (
-	"context"
-
-	"github.com/conductorone/baton-sdk/pkg/cli"
+	"github.com/conductorone/baton-sdk/pkg/field"
 )
 
-// config defines the external configuration required for the connector to run.
-// You can add additional fields here and have them automatically mapped to any additional command line flags.
-type config struct {
-	cli.BaseConfig `mapstructure:",squash"` // Puts the base config options in the same place as the connector options
+var (
+	dbFile = field.StringField("db-file", field.WithDescription("A file to which the database will be written ($BATON_DB_FILE)\nexample: /path/to/dbfile.db"))
+	initDB = field.BoolField("init-db", field.WithDescription("Whether to initialize the database ($BATON_INIT_DB)\nexample: true"))
+)
 
-	DBFile string `mapstructure:"db-file"`
-	InitDB bool   `mapstructure:"init-db"`
-}
+var relationships = []field.SchemaFieldRelationship{}
 
-// validateConfig is run after the configuration is loaded, and should return an error if it isn't valid.
-func validateConfig(ctx context.Context, cfg *config) error {
-	return nil
-}
+var configuration = field.NewConfiguration([]field.SchemaField{
+	dbFile, initDB,
+}, relationships...)
