@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/conductorone/baton-sdk/pkg/cli"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"github.com/spf13/viper"
 	"go.uber.org/zap"
+
+	configschema "github.com/conductorone/baton-sdk/pkg/config"
 
 	"github.com/conductorone/baton-demo/pkg/connector"
 )
@@ -22,15 +24,13 @@ var version = "dev"
 // in order to run.
 func main() {
 	ctx := context.Background()
-
-	cfg := &config{}
-	cmd, err := cli.NewCmd(ctx, "baton-demo", cfg, validateConfig, getConnector)
+	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-demo", getConnector, configuration)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
-	cmd.Version = version
 
+	cmd.Version = version
 	err = cmd.Execute()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
@@ -38,7 +38,7 @@ func main() {
 	}
 }
 
-func getConnector(ctx context.Context, cfg *config) (types.ConnectorServer, error) {
+func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
 	cb, err := connector.New(ctx)
 	if err != nil {
