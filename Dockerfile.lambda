@@ -3,12 +3,12 @@ WORKDIR /tmp/connector
 
 COPY . .
 
-RUN GOOS=linux CGO_ENABLED=0 go build -o bootstrap ./cmd/baton-demo
-FROM alpine:3.9 
-RUN apk add ca-certificates
-COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt/extensions/lambda-adapter
-COPY --from=build_base /tmp/connector/bootstrap /app/bootstrap
-ENV PORT=8000
-EXPOSE 8000
+RUN GOOS=linux CGO_ENABLED=0 go build -o connect-connector ./cmd/baton-demo
+FROM alpine:3.9
+RUN apk add ca-certificates bash curl
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4-x86_64 /lambda-adapter /opt/extensions/lambda-adapter
+COPY --from=build_base /tmp/connector/connect-connector /app/connect-connector
+# ENV AWS_LWA_PORT=8000
+EXPOSE 8080
 
-CMD ["/app/bootstrap", "_connect-experiment"]
+CMD ["/app/connect-connector", "_connect-experiment"]
