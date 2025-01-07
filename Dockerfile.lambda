@@ -6,7 +6,7 @@ COPY . .
 RUN GOOS=linux CGO_ENABLED=0 go build -o connect-connector ./cmd/baton-demo
 FROM alpine:3.9
 RUN apk add ca-certificates bash curl
-COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4-x86_64 /lambda-adapter /opt/extensions/lambda-adapter
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt/extensions/lambda-adapter
 COPY --from=build_base /tmp/connector/connect-connector /app/connect-connector
 # ENV AWS_LWA_PORT=8000
 EXPOSE 8080
