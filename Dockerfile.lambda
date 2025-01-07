@@ -1,0 +1,15 @@
+FROM golang:1.23-alpine AS build_base
+WORKDIR /app
+
+COPY . .
+
+RUN GOOS=linux CGO_ENABLED=0 go build -o /bootstrap ./cmd/baton-demo
+FROM alpine:3.9 
+RUN apk add ca-certificates
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt/extensions/lambda-adapter
+COPY --from=build_base /app/bootstrap /bootstrap
+
+ENV PORT=8000 GIN_MODE=release
+EXPOSE 8000
+
+CMD ["/bootstrap", "_connect-experiment"]
