@@ -111,6 +111,28 @@ func WithTicketingEnabled() Option {
 	}
 }
 
+// clientOnlyWrapper expects a client pointed at a running connector service, and as such does not
+// launch the connector on it's own.
+type clientOnlyWrapper struct {
+	client types.ConnectorClient
+}
+
+func (c *clientOnlyWrapper) C(ctx context.Context) (types.ConnectorClient, error) {
+	return c.client, nil
+}
+
+func (c *clientOnlyWrapper) Run(ctx context.Context, cfg *connectorwrapperV1.ServerConfig) error {
+	return errors.New("server not implemented for client wrapper")
+}
+
+func (c *clientOnlyWrapper) Close() error {
+	return nil
+}
+
+func NewClientOnlyWrapper(ctx context.Context, client types.ConnectorClient, opts ...Option) (*clientOnlyWrapper, error) {
+	return &clientOnlyWrapper{client: client}, nil
+}
+
 // NewConnectorWrapper returns a connector wrapper for running connector services locally.
 func NewWrapper(ctx context.Context, server interface{}, opts ...Option) (*wrapper, error) {
 	connectorServer, isServer := server.(types.ConnectorServer)

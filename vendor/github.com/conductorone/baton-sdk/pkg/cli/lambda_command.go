@@ -202,23 +202,23 @@ func MakeLambdaMainCommand(
 			opts = append(opts, connectorrunner.WithTempDir(v.GetString("c1z-temp-dir")))
 		}
 
-		//c, err := lambdaConnectorClient(runCtx, v.GetString("lambda-endpoint"), v.GetString("lambda-function"))
-		//if err != nil {
-		//	return err
-		//}
+		c, err := lambdaConnectorClient(runCtx, v.GetString("lambda-endpoint"), v.GetString("lambda-function"))
+		if err != nil {
+			return err
+		}
 
-		//r, err := connectorrunner.NewConnectorRunner(runCtx, c, opts...)
-		//if err != nil {
-		//	l.Error("error creating connector runner", zap.Error(err))
-		//	return err
-		//}
-		//defer r.Close(runCtx)
-		//
-		//err = r.Run(runCtx)
-		//if err != nil {
-		//	l.Error("error running connector", zap.Error(err))
-		//	return err
-		//}
+		r, err := connectorrunner.NewClientOnlyConnectorRunner(runCtx, c, opts...)
+		if err != nil {
+			l.Error("error creating connector runner", zap.Error(err))
+			return err
+		}
+		defer r.Close(runCtx)
+
+		err = r.Run(runCtx)
+		if err != nil {
+			l.Error("error running connector", zap.Error(err))
+			return err
+		}
 
 		return nil
 	}
