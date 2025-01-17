@@ -12,7 +12,7 @@ var version = "dev"
 
 func main() {
 	ctx := context.Background()
-	_, cmd, err := config.DefineLambdaConfiguration(ctx, "baton-lambda", configuration)
+	_, cmd, err := config.DefineLambdaClientConfiguration(ctx, "baton-lambda", configuration)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)

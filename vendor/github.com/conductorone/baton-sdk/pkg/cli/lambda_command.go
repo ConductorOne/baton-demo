@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	aws_config "github.com/aws/aws-sdk-go-v2/config"
 	lambda_sdk "github.com/aws/aws-sdk-go-v2/service/lambda"
 	aws_transport "github.com/aws/smithy-go/endpoints"
+	"github.com/davecgh/go-spew/spew"
+	c1_lambda_config "github.com/ductone/c1-lambda/pkg/config"
 	c1_lambda_grpc "github.com/ductone/c1-lambda/pkg/grpc"
+	"google.golang.org/protobuf/types/known/structpb"
+
 	"github.com/ductone/c1-lambda/pkg/grpc/transport"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/spf13/cobra"
@@ -302,8 +307,48 @@ func MakeLambdaServerCommand(
 			return err
 		}
 
+		// Get configuration, convert it to viper flag values, then proceed.
+		// TODO(morgabra): Should we start the lambda handler first? What are the timeouts for startup?
+		config, err := c1_lambda_config.GetConnectorConfig(
+			ctx,
+			v.GetString("lambda-configuration-endpoint"),
+			v.GetString("lambda-configuration-endpoint-token"),
+		)
+		if err != nil {
+			return err
+		}
+
+		spew.Dump("GOT CONFIG: ", config)
+
+		// For each thing in the schema, see if it exists in the config with the correct type.
+		// If it does, set the value.
+		for _, f := range confschema.Fields {
+			// Fetch the config value by field name.
+			// TODO(morgabra): Normalization here?
+			cv, ok := config.GetConfig().GetFields()[f.FieldName]
+			if !ok {
+				continue
+			}
+
+			switch f.FieldType {
+			case reflect.Bool:
+				_, ok := cv.GetKind().(*structpb.Value_BoolValue)
+				if !ok {
+					return fmt.Errorf("field %s configuration type %T doesn't match expected type %s", f.FieldName, cv.GetKind(), f.FieldType.String())
+				}
+				v.Set(f.FieldName, cv.GetBoolValue())
+			case reflect.String:
+				_, ok := cv.GetKind().(*structpb.Value_StringValue)
+				if !ok {
+					return fmt.Errorf("field %s configuration type %T doesn't match expected type %s", f.FieldName, cv.GetKind(), f.FieldType.String())
+				}
+				v.Set(f.FieldName, cv.GetStringValue())
+			default:
+				return fmt.Errorf("config: field %s has unsupported type %s", f.FieldName, f.FieldType)
+			}
+		}
+
 		// validate required fields and relationship constraints
-		// TODO(morgabra/kans): We need to fetch our config before we can instantiate a connector...
 		if err := field.Validate(confschema, v); err != nil {
 			return err
 		}

@@ -199,6 +199,9 @@ github.com/conductorone/baton-sdk/pkg/uhttp
 github.com/conductorone/baton-sdk/pkg/us3
 github.com/conductorone/baton-sdk/pkg/ustrings
 github.com/conductorone/baton-sdk/pkg/utls
+# github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
+## explicit
+github.com/davecgh/go-spew/spew
 # github.com/deckarep/golang-set/v2 v2.7.0
 ## explicit; go 1.18
 github.com/deckarep/golang-set/v2
@@ -218,7 +221,9 @@ github.com/doug-martin/goqu/v9/internal/util
 github.com/doug-martin/goqu/v9/sqlgen
 # github.com/ductone/c1-lambda v0.0.0-00010101000000-000000000000 => ../../ductone/c1-lambda
 ## explicit; go 1.23.4
+github.com/ductone/c1-lambda/pb/c1/svc/connector_manager/v1
 github.com/ductone/c1-lambda/pb/c1/transport/v1
+github.com/ductone/c1-lambda/pkg/config
 github.com/ductone/c1-lambda/pkg/grpc
 github.com/ductone/c1-lambda/pkg/grpc/transport
 # github.com/dustin/go-humanize v1.0.1

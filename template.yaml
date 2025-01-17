@@ -18,7 +18,8 @@ Resources:
       - arm64
       Environment:
         Variables:
-          PARAM1: VALUE
+          BATON_LAMBDA_CONFIGURATION_ENDPOINT: connector-manager.morgabra.d2.ductone.com:2443
+          BATON_LAMBDA_CONFIGURATION_ENDPOINT_TOKEN: FOOBAR
     Metadata:
       DockerTag: provided.al2023-v1
       DockerContext: .
