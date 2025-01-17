@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  baton-demo
+
+Globals:
+  Function:
+    Timeout: 5
+    MemorySize: 128
+    LoggingConfig:
+      LogFormat: JSON
+Resources:
+  BatonDemoConnector:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Architectures:
+      - arm64
+      Environment:
+        Variables:
+          PARAM1: VALUE
+    Metadata:
+      DockerTag: provided.al2023-v1
+      DockerContext: .
+      Dockerfile: Dockerfile.lambda

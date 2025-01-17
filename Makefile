@@ -27,3 +27,11 @@ add-dep:
 lint:
 	golangci-lint run
 
+.PHONY: sam-build
+sam-build:
+	DOCKER_HOST=unix://$(HOME)/.docker/run/docker.sock sam build
+
+.PHONY: sam-run
+sam-run: sam-build
+	DOCKER_HOST=unix://$(HOME)/.docker/run/docker.sock sam local start-lambda
+

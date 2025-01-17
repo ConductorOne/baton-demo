@@ -43,6 +43,7 @@ type connectorClient struct {
 	connectorV2.AccountManagerServiceClient
 	connectorV2.CredentialManagerServiceClient
 	connectorV2.EventServiceClient
+	connectorV2.TicketsServiceClient
 }
 
 var ErrConnectorNotImplemented = errors.New("client does not implement connector connectorV2")
@@ -55,6 +56,8 @@ type wrapper struct {
 	serverStdin         io.WriteCloser
 	conn                *grpc.ClientConn
 	provisioningEnabled bool
+	ticketingEnabled    bool
+	fullSyncDisabled    bool
 
 	rateLimiter   ratelimitV1.RateLimiterServiceServer
 	rlCfg         *ratelimitV1.RateLimiterConfig
@@ -93,6 +96,21 @@ func WithProvisioningEnabled() Option {
 	}
 }
 
+func WithFullSyncDisabled() Option {
+	return func(ctx context.Context, w *wrapper) error {
+		w.fullSyncDisabled = true
+		return nil
+	}
+}
+
+func WithTicketingEnabled() Option {
+	return func(ctx context.Context, w *wrapper) error {
+		w.ticketingEnabled = true
+
+		return nil
+	}
+}
+
 // NewConnectorWrapper returns a connector wrapper for running connector services locally.
 func NewWrapper(ctx context.Context, server interface{}, opts ...Option) (*wrapper, error) {
 	connectorServer, isServer := server.(types.ConnectorServer)
@@ -115,6 +133,50 @@ func NewWrapper(ctx context.Context, server interface{}, opts ...Option) (*wrapp
 	return w, nil
 }
 
+type RegisterOps struct {
+	Ratelimiter         ratelimitV1.RateLimiterServiceServer
+	ProvisioningEnabled bool
+	TicketingEnabled    bool
+}
+
+func Register(ctx context.Context, s grpc.ServiceRegistrar, srv types.ConnectorServer, opts *RegisterOps) {
+	if opts == nil {
+		opts = &RegisterOps{}
+	}
+
+	connectorV2.RegisterConnectorServiceServer(s, srv)
+	connectorV2.RegisterGrantsServiceServer(s, srv)
+	connectorV2.RegisterEntitlementsServiceServer(s, srv)
+	connectorV2.RegisterResourcesServiceServer(s, srv)
+	connectorV2.RegisterResourceTypesServiceServer(s, srv)
+	connectorV2.RegisterAssetServiceServer(s, srv)
+	connectorV2.RegisterEventServiceServer(s, srv)
+
+	if opts.TicketingEnabled {
+		connectorV2.RegisterTicketsServiceServer(s, srv)
+	} else {
+		noop := &noopTicketing{}
+		connectorV2.RegisterTicketsServiceServer(s, noop)
+	}
+
+	if opts.ProvisioningEnabled {
+		connectorV2.RegisterGrantManagerServiceServer(s, srv)
+		connectorV2.RegisterResourceManagerServiceServer(s, srv)
+		connectorV2.RegisterAccountManagerServiceServer(s, srv)
+		connectorV2.RegisterCredentialManagerServiceServer(s, srv)
+	} else {
+		noop := &noopProvisioner{}
+		connectorV2.RegisterGrantManagerServiceServer(s, noop)
+		connectorV2.RegisterResourceManagerServiceServer(s, noop)
+		connectorV2.RegisterAccountManagerServiceServer(s, noop)
+		connectorV2.RegisterCredentialManagerServiceServer(s, noop)
+	}
+
+	if opts.Ratelimiter != nil {
+		ratelimitV1.RegisterRateLimiterServiceServer(s, opts.Ratelimiter)
+	}
+}
+
 func (cw *wrapper) Run(ctx context.Context, serverCfg *connectorwrapperV1.ServerConfig) error {
 	logger := ctxzap.Extract(ctx)
 
@@ -135,35 +197,18 @@ func (cw *wrapper) Run(ctx context.Context, serverCfg *connectorwrapperV1.Server
 		grpc.ChainUnaryInterceptor(ugrpc.UnaryServerInterceptor(ctx)...),
 		grpc.ChainStreamInterceptor(ugrpc.StreamServerInterceptors(ctx)...),
 	)
-	connectorV2.RegisterConnectorServiceServer(server, cw.server)
-	connectorV2.RegisterGrantsServiceServer(server, cw.server)
-	connectorV2.RegisterEntitlementsServiceServer(server, cw.server)
-	connectorV2.RegisterResourcesServiceServer(server, cw.server)
-	connectorV2.RegisterResourceTypesServiceServer(server, cw.server)
-	connectorV2.RegisterAssetServiceServer(server, cw.server)
-	connectorV2.RegisterEventServiceServer(server, cw.server)
-
-	if cw.provisioningEnabled {
-		connectorV2.RegisterGrantManagerServiceServer(server, cw.server)
-		connectorV2.RegisterResourceManagerServiceServer(server, cw.server)
-		connectorV2.RegisterAccountManagerServiceServer(server, cw.server)
-		connectorV2.RegisterCredentialManagerServiceServer(server, cw.server)
-	} else {
-		noop := &noopProvisioner{}
-		connectorV2.RegisterGrantManagerServiceServer(server, noop)
-		connectorV2.RegisterResourceManagerServiceServer(server, noop)
-		connectorV2.RegisterAccountManagerServiceServer(server, noop)
-		connectorV2.RegisterCredentialManagerServiceServer(server, noop)
-	}
 
 	rl, err := ratelimit2.NewLimiter(ctx, cw.now, serverCfg.RateLimiterConfig)
 	if err != nil {
 		return err
 	}
 	cw.rateLimiter = rl
-
-	ratelimitV1.RegisterRateLimiterServiceServer(server, cw.rateLimiter)
-
+	opts := &RegisterOps{
+		Ratelimiter:         cw.rateLimiter,
+		ProvisioningEnabled: cw.provisioningEnabled,
+		TicketingEnabled:    cw.ticketingEnabled,
+	}
+	Register(ctx, server, cw.server, opts)
 	return server.Serve(l)
 }
 
@@ -231,6 +276,7 @@ func (cw *wrapper) runServer(ctx context.Context, serverCred *tlsV1.Credential) 
 			if waitErr != nil {
 				l.Error("error closing connector wrapper", zap.Error(waitErr))
 			}
+			os.Exit(1)
 		}
 	}()
 
@@ -314,6 +360,7 @@ func (cw *wrapper) C(ctx context.Context) (types.ConnectorClient, error) {
 		AccountManagerServiceClient:    connectorV2.NewAccountManagerServiceClient(cw.conn),
 		CredentialManagerServiceClient: connectorV2.NewCredentialManagerServiceClient(cw.conn),
 		EventServiceClient:             connectorV2.NewEventServiceClient(cw.conn),
+		TicketsServiceClient:           connectorV2.NewTicketsServiceClient(cw.conn),
 	}
 
 	return cw.client, nil
@@ -334,7 +381,7 @@ func (cw *wrapper) Close() error {
 
 	if cw.serverStdin != nil {
 		err = cw.serverStdin.Close()
-		if err != nil {
+		if err != nil && errors.Is(err, os.ErrClosed) {
 			return fmt.Errorf("error closing connector service stdin: %w", err)
 		}
 	}

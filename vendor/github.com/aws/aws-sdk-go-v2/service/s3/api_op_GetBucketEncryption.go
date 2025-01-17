@@ -10,23 +10,33 @@ import (
 	s3cust "github.com/aws/aws-sdk-go-v2/service/s3/internal/customizations"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go/middleware"
+	"github.com/aws/smithy-go/ptr"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
+// This operation is not supported by directory buckets.
+//
 // Returns the default encryption configuration for an Amazon S3 bucket. By
 // default, all buckets have a default encryption configuration that uses
 // server-side encryption with Amazon S3 managed keys (SSE-S3). For information
-// about the bucket default encryption feature, see Amazon S3 Bucket Default
-// Encryption (https://docs.aws.amazon.com/AmazonS3/latest/dev/bucket-encryption.html)
-// in the Amazon S3 User Guide. To use this operation, you must have permission to
-// perform the s3:GetEncryptionConfiguration action. The bucket owner has this
-// permission by default. The bucket owner can grant this permission to others. For
-// more information about permissions, see Permissions Related to Bucket
-// Subresource Operations (https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-actions.html#using-with-s3-actions-related-to-bucket-subresources)
-// and Managing Access Permissions to Your Amazon S3 Resources (https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-access-control.html)
-// . The following operations are related to GetBucketEncryption :
-//   - PutBucketEncryption (https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketEncryption.html)
-//   - DeleteBucketEncryption (https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketEncryption.html)
+// about the bucket default encryption feature, see [Amazon S3 Bucket Default Encryption]in the Amazon S3 User Guide.
+//
+// To use this operation, you must have permission to perform the
+// s3:GetEncryptionConfiguration action. The bucket owner has this permission by
+// default. The bucket owner can grant this permission to others. For more
+// information about permissions, see [Permissions Related to Bucket Subresource Operations]and [Managing Access Permissions to Your Amazon S3 Resources].
+//
+// The following operations are related to GetBucketEncryption :
+//
+// [PutBucketEncryption]
+//
+// [DeleteBucketEncryption]
+//
+// [DeleteBucketEncryption]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketEncryption.html
+// [PutBucketEncryption]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketEncryption.html
+// [Permissions Related to Bucket Subresource Operations]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-actions.html#using-with-s3-actions-related-to-bucket-subresources
+// [Amazon S3 Bucket Default Encryption]: https://docs.aws.amazon.com/AmazonS3/latest/dev/bucket-encryption.html
+// [Managing Access Permissions to Your Amazon S3 Resources]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-access-control.html
 func (c *Client) GetBucketEncryption(ctx context.Context, params *GetBucketEncryptionInput, optFns ...func(*Options)) (*GetBucketEncryptionOutput, error) {
 	if params == nil {
 		params = &GetBucketEncryptionInput{}
@@ -50,9 +60,9 @@ type GetBucketEncryptionInput struct {
 	// This member is required.
 	Bucket *string
 
-	// The account ID of the expected bucket owner. If the bucket is owned by a
-	// different account, the request fails with the HTTP status code 403 Forbidden
-	// (access denied).
+	// The account ID of the expected bucket owner. If the account ID that you provide
+	// does not match the actual owner of the bucket, the request fails with the HTTP
+	// status code 403 Forbidden (access denied).
 	ExpectedBucketOwner *string
 
 	noSmithyDocumentSerde
@@ -60,7 +70,7 @@ type GetBucketEncryptionInput struct {
 
 func (in *GetBucketEncryptionInput) bindEndpointParams(p *EndpointParameters) {
 	p.Bucket = in.Bucket
-
+	p.UseS3ExpressControlEndpoint = ptr.Bool(true)
 }
 
 type GetBucketEncryptionOutput struct {
@@ -96,25 +106,25 @@ func (c *Client) addOperationGetBucketEncryptionMiddlewares(stack *middleware.St
 	if err = addSetLoggerMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddClientRequestIDMiddleware(stack); err != nil {
+	if err = addClientRequestID(stack); err != nil {
 		return err
 	}
-	if err = smithyhttp.AddComputeContentLengthMiddleware(stack); err != nil {
+	if err = addComputeContentLength(stack); err != nil {
 		return err
 	}
 	if err = addResolveEndpointMiddleware(stack, options); err != nil {
 		return err
 	}
-	if err = v4.AddComputePayloadSHA256Middleware(stack); err != nil {
+	if err = addComputePayloadSHA256(stack); err != nil {
 		return err
 	}
-	if err = addRetryMiddlewares(stack, options); err != nil {
+	if err = addRetry(stack, options); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRawResponseToMetadata(stack); err != nil {
+	if err = addRawResponseToMetadata(stack); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRecordResponseTiming(stack); err != nil {
+	if err = addRecordResponseTiming(stack); err != nil {
 		return err
 	}
 	if err = addClientUserAgent(stack, options); err != nil {
@@ -129,6 +139,9 @@ func (c *Client) addOperationGetBucketEncryptionMiddlewares(stack *middleware.St
 	if err = addSetLegacyContextSigningOptionsMiddleware(stack); err != nil {
 		return err
 	}
+	if err = addPutBucketContextMiddleware(stack); err != nil {
+		return err
+	}
 	if err = addOpGetBucketEncryptionValidationMiddleware(stack); err != nil {
 		return err
 	}
@@ -138,7 +151,7 @@ func (c *Client) addOperationGetBucketEncryptionMiddlewares(stack *middleware.St
 	if err = addMetadataRetrieverMiddleware(stack); err != nil {
 		return err
 	}
-	if err = awsmiddleware.AddRecursionDetection(stack); err != nil {
+	if err = addRecursionDetection(stack); err != nil {
 		return err
 	}
 	if err = addGetBucketEncryptionUpdateEndpoint(stack, options); err != nil {
