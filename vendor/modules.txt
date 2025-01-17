@@ -94,6 +94,11 @@ github.com/aws/aws-sdk-go-v2/service/internal/presigned-url
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared/arn
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared/config
+# github.com/aws/aws-sdk-go-v2/service/lambda v1.69.6
+## explicit; go 1.21
+github.com/aws/aws-sdk-go-v2/service/lambda
+github.com/aws/aws-sdk-go-v2/service/lambda/internal/endpoints
+github.com/aws/aws-sdk-go-v2/service/lambda/types
 # github.com/aws/aws-sdk-go-v2/service/s3 v1.54.0
 ## explicit; go 1.20
 github.com/aws/aws-sdk-go-v2/service/s3
@@ -215,6 +220,7 @@ github.com/doug-martin/goqu/v9/sqlgen
 ## explicit; go 1.23.4
 github.com/ductone/c1-lambda/pb/c1/transport/v1
 github.com/ductone/c1-lambda/pkg/grpc
+github.com/ductone/c1-lambda/pkg/grpc/transport
 # github.com/dustin/go-humanize v1.0.1
 ## explicit; go 1.16
 github.com/dustin/go-humanize
@@ -273,6 +279,9 @@ github.com/hashicorp/hcl/json/token
 # github.com/inconshreveable/mousetrap v1.1.0
 ## explicit; go 1.18
 github.com/inconshreveable/mousetrap
+# github.com/jmespath/go-jmespath v0.4.0
+## explicit; go 1.14
+github.com/jmespath/go-jmespath
 # github.com/klauspost/compress v1.17.11
 ## explicit; go 1.21
 github.com/klauspost/compress

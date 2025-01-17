@@ -4,13 +4,16 @@ BUILD_DIR = dist/${GOOS}_${GOARCH}
 
 ifeq ($(GOOS),windows)
 OUTPUT_PATH = ${BUILD_DIR}/baton-demo.exe
+LAMBDA_OUTPUT_PATH = ${BUILD_DIR}/baton-lambda.exe
 else
 OUTPUT_PATH = ${BUILD_DIR}/baton-demo
+LAMBDA_OUTPUT_PATH = ${BUILD_DIR}/baton-lambda
 endif
 
 .PHONY: build
 build:
 	go build -o ${OUTPUT_PATH} ./cmd/baton-demo
+	go build -o ${LAMBDA_OUTPUT_PATH} ./cmd/baton-lambda
 
 .PHONY: update-deps
 update-deps:

@@ -283,6 +283,26 @@ func (cw *wrapper) runServer(ctx context.Context, serverCred *tlsV1.Credential) 
 	return listenPort, nil
 }
 
+// NewConnectorClient takes a grpc.ClientConnInterface and returns an implementation of the ConnectorClient interface.
+// It does not check that the connection actually supports the services.
+func NewConnectorClient(ctx context.Context, cc grpc.ClientConnInterface) types.ConnectorClient {
+	return &connectorClient{
+		ResourceTypesServiceClient:     connectorV2.NewResourceTypesServiceClient(cc),
+		ResourcesServiceClient:         connectorV2.NewResourcesServiceClient(cc),
+		EntitlementsServiceClient:      connectorV2.NewEntitlementsServiceClient(cc),
+		GrantsServiceClient:            connectorV2.NewGrantsServiceClient(cc),
+		ConnectorServiceClient:         connectorV2.NewConnectorServiceClient(cc),
+		AssetServiceClient:             connectorV2.NewAssetServiceClient(cc),
+		RateLimiterServiceClient:       ratelimitV1.NewRateLimiterServiceClient(cc),
+		GrantManagerServiceClient:      connectorV2.NewGrantManagerServiceClient(cc),
+		ResourceManagerServiceClient:   connectorV2.NewResourceManagerServiceClient(cc),
+		AccountManagerServiceClient:    connectorV2.NewAccountManagerServiceClient(cc),
+		CredentialManagerServiceClient: connectorV2.NewCredentialManagerServiceClient(cc),
+		EventServiceClient:             connectorV2.NewEventServiceClient(cc),
+		TicketsServiceClient:           connectorV2.NewTicketsServiceClient(cc),
+	}
+}
+
 // C returns a ConnectorClient that the caller can use to interact with a locally running connector.
 func (cw *wrapper) C(ctx context.Context) (types.ConnectorClient, error) {
 	// Check to see if we have a client already
@@ -346,22 +366,7 @@ func (cw *wrapper) C(ctx context.Context) (types.ConnectorClient, error) {
 	}
 
 	cw.conn = conn
-
-	cw.client = &connectorClient{
-		ResourceTypesServiceClient:     connectorV2.NewResourceTypesServiceClient(cw.conn),
-		ResourcesServiceClient:         connectorV2.NewResourcesServiceClient(cw.conn),
-		EntitlementsServiceClient:      connectorV2.NewEntitlementsServiceClient(cw.conn),
-		GrantsServiceClient:            connectorV2.NewGrantsServiceClient(cw.conn),
-		ConnectorServiceClient:         connectorV2.NewConnectorServiceClient(cw.conn),
-		AssetServiceClient:             connectorV2.NewAssetServiceClient(cw.conn),
-		RateLimiterServiceClient:       ratelimitV1.NewRateLimiterServiceClient(cw.conn),
-		GrantManagerServiceClient:      connectorV2.NewGrantManagerServiceClient(cw.conn),
-		ResourceManagerServiceClient:   connectorV2.NewResourceManagerServiceClient(cw.conn),
-		AccountManagerServiceClient:    connectorV2.NewAccountManagerServiceClient(cw.conn),
-		CredentialManagerServiceClient: connectorV2.NewCredentialManagerServiceClient(cw.conn),
-		EventServiceClient:             connectorV2.NewEventServiceClient(cw.conn),
-		TicketsServiceClient:           connectorV2.NewTicketsServiceClient(cw.conn),
-	}
+	cw.client = NewConnectorClient(ctx, cw.conn)
 
 	return cw.client, nil
 }

@@ -31,7 +31,17 @@ var (
 	ticketTemplatePathField    = StringField("ticket-template-path", WithHidden(true), WithDescription("A JSON file describing the ticket to create"), WithPersistent(true))
 	logLevelField              = StringField("log-level", WithDefaultValue("info"), WithDescription("The log level: debug, info, warn, error"), WithPersistent(true))
 	skipFullSync               = BoolField("skip-full-sync", WithDescription("This must be set to skip a full sync"), WithPersistent(true))
+
+	lambdaEndpointField = StringField("lambda-endpoint", WithDescription("The endpoint to use for the lambda service"), WithPersistent(true))
+	lambdaFunctionField = StringField("lambda-function", WithDescription("The name of the lambda function to invoke"), WithPersistent(true))
 )
+
+func LambdaFields() []SchemaField {
+	return []SchemaField{
+		lambdaEndpointField,
+		lambdaFunctionField,
+	}
+}
 
 // DefaultFields list the default fields expected in every single connector.
 var DefaultFields = []SchemaField{
