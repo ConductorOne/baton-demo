@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
 
 	pb_connector_manager "github.com/ductone/c1-lambda/pb/c1/svc/connector_manager/v1"
@@ -37,7 +37,7 @@ func CreateSigv4STSGetCallerIdentityRequest(ctx context.Context, cfg aws.Config)
 	region := cfg.Region
 	body := "Action=GetCallerIdentity&Version=2011-06-15"
 	service := "sts"
-	endpoint := "https://sts.amazonaws.com"
+	endpoint := fmt.Sprintf("https://sts.%s.amazonaws.com", region)
 	method := "POST"
 
 	reqHeaders := map[string][]string{
@@ -48,6 +48,7 @@ func CreateSigv4STSGetCallerIdentityRequest(ctx context.Context, cfg aws.Config)
 	if err != nil {
 		return nil, fmt.Errorf("create-sigv4-sts-get-caller-identity-request: failed to create request: %w", err)
 	}
+
 	for headerKey, headerValues := range reqHeaders {
 		for _, headerValue := range headerValues {
 			req.Header.Add(headerKey, headerValue)
@@ -55,14 +56,17 @@ func CreateSigv4STSGetCallerIdentityRequest(ctx context.Context, cfg aws.Config)
 	}
 
 	// Use the AWS SigV4 signer
-	signer := v4.NewSigner()
-	signedURI, signedRawHeaders, err := signer.PresignHTTP(ctx, credentials, req, Sha256AndHexEncode(body), service, region, time.Now())
+	signer := v4.NewSigner(func(options *v4.SignerOptions) {
+		// options.DisableSessionToken = true
+		options.DisableHeaderHoisting = true // maybe only applicable to presigned requests
+	})
+	err = signer.SignHTTP(ctx, credentials, req, Sha256AndHexEncode(body), service, region, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("create-sigv4-sts-get-caller-identity-request: failed to sign request: %w", err)
 	}
 
 	signedHeaders := make([]*pb_connector_manager.SignedHeader, 0)
-	for signedHeaderKey, signedHeaderValues := range signedRawHeaders {
+	for signedHeaderKey, signedHeaderValues := range req.Header {
 		v := make([]string, len(signedHeaderValues))
 		copy(v, signedHeaderValues)
 		signedHeader := &pb_connector_manager.SignedHeader{
@@ -72,9 +76,13 @@ func CreateSigv4STSGetCallerIdentityRequest(ctx context.Context, cfg aws.Config)
 		signedHeaders = append(signedHeaders, signedHeader)
 	}
 
+	// signedHeaders = append(signedHeaders, &pb_connector_manager.SignedHeader{
+	// 	Key:   "Content-Length",
+	// 	Value: []string{"32"},
+	// })
 	return &pb_connector_manager.Sigv4SignedRequestSTSGetCallerIdentity{
 		Method:   method,
-		Endpoint: signedURI,
+		Endpoint: endpoint,
 		Headers:  signedHeaders,
 		Body:     []byte(body),
 	}, nil

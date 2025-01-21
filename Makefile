@@ -19,6 +19,11 @@ build:
 	go build -o ${LAMBDA_CLIENT_OUTPUT_PATH} ./cmd/baton-lambda-client
 	go build -o ${LAMBDA_SERVER_OUTPUT_PATH} ./cmd/baton-lambda-server
 
+.PHONY: build-lambda-server
+build-lambda-server:
+	go build -o ${LAMBDA_SERVER_OUTPUT_PATH} ./cmd/baton-lambda-server
+
+
 .PHONY: update-deps
 update-deps:
 	go get -d -u ./...

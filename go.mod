@@ -102,6 +102,6 @@ require (
 	modernc.org/sqlite v1.34.4 // indirect
 )
 
-replace github.com/ductone/c1-lambda => ../../ductone/c1-lambda
+replace github.com/ductone/c1-lambda => ../c1-lambda
 
 replace github.com/conductorone/baton-sdk => ../baton-sdk

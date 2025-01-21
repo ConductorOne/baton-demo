@@ -219,7 +219,7 @@ github.com/doug-martin/goqu/v9/internal/sb
 github.com/doug-martin/goqu/v9/internal/tag
 github.com/doug-martin/goqu/v9/internal/util
 github.com/doug-martin/goqu/v9/sqlgen
-# github.com/ductone/c1-lambda v0.0.0-00010101000000-000000000000 => ../../ductone/c1-lambda
+# github.com/ductone/c1-lambda v0.0.0-00010101000000-000000000000 => ../c1-lambda
 ## explicit; go 1.23.4
 github.com/ductone/c1-lambda/pb/c1/svc/connector_manager/v1
 github.com/ductone/c1-lambda/pb/c1/transport/v1
@@ -648,5 +648,5 @@ modernc.org/memory
 # modernc.org/sqlite v1.34.4
 ## explicit; go 1.21
 modernc.org/sqlite/lib
-# github.com/ductone/c1-lambda => ../../ductone/c1-lambda
+# github.com/ductone/c1-lambda => ../c1-lambda
 # github.com/conductorone/baton-sdk => ../baton-sdk

@@ -11,7 +11,6 @@ import (
 	aws_config "github.com/aws/aws-sdk-go-v2/config"
 	lambda_sdk "github.com/aws/aws-sdk-go-v2/service/lambda"
 	aws_transport "github.com/aws/smithy-go/endpoints"
-	"github.com/davecgh/go-spew/spew"
 	c1_lambda_config "github.com/ductone/c1-lambda/pkg/config"
 	c1_lambda_grpc "github.com/ductone/c1-lambda/pkg/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -317,8 +316,6 @@ func MakeLambdaServerCommand(
 		if err != nil {
 			return err
 		}
-
-		spew.Dump("GOT CONFIG: ", config)
 
 		// For each thing in the schema, see if it exists in the config with the correct type.
 		// If it does, set the value.
