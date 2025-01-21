@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/conductorone/baton-sdk/pkg/cli"
+	"github.com/spf13/viper"
+
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 
 	"github.com/conductorone/baton-demo/pkg/connector"
+	configschema "github.com/conductorone/baton-sdk/pkg/config"
 )
 
 var version = "dev"
@@ -23,12 +25,12 @@ var version = "dev"
 func main() {
 	ctx := context.Background()
 
-	cfg := &config{}
-	cmd, err := cli.NewCmd(ctx, "baton-demo", cfg, validateConfig, getConnector)
+	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-demo", getConnector, configuration)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
+
 	cmd.Version = version
 
 	err = cmd.Execute()
@@ -38,19 +40,20 @@ func main() {
 	}
 }
 
-func getConnector(ctx context.Context, cfg *config) (types.ConnectorServer, error) {
+func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
-	cb, err := connector.New(ctx)
+
+	cb, err := connector.New(ctx, v.GetString("db-file"), v.GetBool("init-db"))
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err
 	}
 
-	c, err := connectorbuilder.NewConnector(ctx, cb)
+	newConnector, err := connectorbuilder.NewConnector(ctx, cb)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err
 	}
 
-	return c, nil
+	return newConnector, nil
 }
