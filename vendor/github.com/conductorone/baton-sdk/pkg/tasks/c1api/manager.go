@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
@@ -79,6 +80,9 @@ func getNextPoll(d time.Duration) time.Duration {
 }
 
 func (c *c1ApiTaskManager) Next(ctx context.Context) (*v1.Task, time.Duration, error) {
+	ctx, span := tracer.Start(ctx, "c1ApiTaskManager.Next", trace.WithNewRoot())
+	defer span.End()
+
 	l := ctxzap.Extract(ctx)
 
 	c.mtx.Lock()
@@ -130,6 +134,9 @@ func (c *c1ApiTaskManager) Next(ctx context.Context) (*v1.Task, time.Duration, e
 }
 
 func (c *c1ApiTaskManager) finishTask(ctx context.Context, task *v1.Task, resp proto.Message, annos annotations.Annotations, err error) error {
+	ctx, span := tracer.Start(ctx, "c1ApiTaskManager.finishTask")
+	defer span.End()
+
 	l := ctxzap.Extract(ctx)
 	l = l.With(
 		zap.String("task_id", task.GetId()),
@@ -139,12 +146,13 @@ func (c *c1ApiTaskManager) finishTask(ctx context.Context, task *v1.Task, resp p
 	finishCtx, finishCanc := context.WithTimeout(context.Background(), time.Second*30)
 	defer finishCanc()
 
+	var err2 error
 	var marshalledResp *anypb.Any
 	if resp != nil {
-		marshalledResp, err = anypb.New(resp)
-		if err != nil {
-			l.Error("c1_api_task_manager.finishTask(): error while attempting to marshal response", zap.Error(err))
-			return err
+		marshalledResp, err2 = anypb.New(resp)
+		if err2 != nil {
+			l.Error("c1_api_task_manager.finishTask(): error while attempting to marshal response", zap.Error(err2))
+			return err2
 		}
 	}
 
@@ -206,6 +214,9 @@ func (c *c1ApiTaskManager) ShouldDebug() bool {
 }
 
 func (c *c1ApiTaskManager) Process(ctx context.Context, task *v1.Task, cc types.ConnectorClient) error {
+	ctx, span := tracer.Start(ctx, "c1ApiTaskManager.Process", trace.WithNewRoot())
+	defer span.End()
+
 	l := ctxzap.Extract(ctx)
 	if task == nil {
 		l.Debug("c1_api_task_manager.Process(): process called with nil task -- continuing")
