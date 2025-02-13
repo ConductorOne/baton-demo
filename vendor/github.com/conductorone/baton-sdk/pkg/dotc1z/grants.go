@@ -58,6 +58,9 @@ func (r *grantsTable) Schema() (string, []interface{}) {
 }
 
 func (c *C1File) ListGrants(ctx context.Context, request *v2.GrantsServiceListGrantsRequest) (*v2.GrantsServiceListGrantsResponse, error) {
+	ctx, span := tracer.Start(ctx, "C1File.ListGrants")
+	defer span.End()
+
 	objs, nextPageToken, err := c.listConnectorObjects(ctx, grants.Name(), request)
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants: %w", err)
@@ -80,6 +83,9 @@ func (c *C1File) ListGrants(ctx context.Context, request *v2.GrantsServiceListGr
 }
 
 func (c *C1File) GetGrant(ctx context.Context, request *reader_v2.GrantsReaderServiceGetGrantRequest) (*reader_v2.GrantsReaderServiceGetGrantResponse, error) {
+	ctx, span := tracer.Start(ctx, "C1File.GetGrant")
+	defer span.End()
+
 	ret := &v2.Grant{}
 
 	err := c.getConnectorObject(ctx, grants.Name(), request.GrantId, ret)
@@ -96,6 +102,9 @@ func (c *C1File) ListGrantsForEntitlement(
 	ctx context.Context,
 	request *reader_v2.GrantsReaderServiceListGrantsForEntitlementRequest,
 ) (*reader_v2.GrantsReaderServiceListGrantsForEntitlementResponse, error) {
+	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForEntitlement")
+	defer span.End()
+
 	objs, nextPageToken, err := c.listConnectorObjects(ctx, grants.Name(), request)
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants for entitlement '%s': %w", request.GetEntitlement().GetId(), err)
@@ -121,6 +130,9 @@ func (c *C1File) ListGrantsForPrincipal(
 	ctx context.Context,
 	request *reader_v2.GrantsReaderServiceListGrantsForEntitlementRequest,
 ) (*reader_v2.GrantsReaderServiceListGrantsForEntitlementResponse, error) {
+	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForPrincipal")
+	defer span.End()
+
 	objs, nextPageToken, err := c.listConnectorObjects(ctx, grants.Name(), request)
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants for principal '%s': %w", request.GetPrincipalId(), err)
@@ -146,6 +158,9 @@ func (c *C1File) ListGrantsForResourceType(
 	ctx context.Context,
 	request *reader_v2.GrantsReaderServiceListGrantsForResourceTypeRequest,
 ) (*reader_v2.GrantsReaderServiceListGrantsForResourceTypeResponse, error) {
+	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForResourceType")
+	defer span.End()
+
 	objs, nextPageToken, err := c.listConnectorObjects(ctx, grants.Name(), request)
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants for resource type '%s': %w", request.GetResourceTypeId(), err)
@@ -168,24 +183,21 @@ func (c *C1File) ListGrantsForResourceType(
 }
 
 func (c *C1File) PutGrants(ctx context.Context, bulkGrants ...*v2.Grant) error {
-	err := c.db.WithTx(func(tx *goqu.TxDatabase) error {
-		err := bulkPutConnectorObjectTx(ctx, c, tx, grants.Name(),
-			func(grant *v2.Grant) (goqu.Record, error) {
-				return goqu.Record{
-					"resource_type_id":           grant.Entitlement.Resource.Id.ResourceType,
-					"resource_id":                grant.Entitlement.Resource.Id.Resource,
-					"entitlement_id":             grant.Entitlement.Id,
-					"principal_resource_type_id": grant.Principal.Id.ResourceType,
-					"principal_resource_id":      grant.Principal.Id.Resource,
-				}, nil
-			},
-			bulkGrants...,
-		)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
+	ctx, span := tracer.Start(ctx, "C1File.PutGrants")
+	defer span.End()
+
+	err := bulkPutConnectorObject(ctx, c, grants.Name(),
+		func(grant *v2.Grant) (goqu.Record, error) {
+			return goqu.Record{
+				"resource_type_id":           grant.Entitlement.Resource.Id.ResourceType,
+				"resource_id":                grant.Entitlement.Resource.Id.Resource,
+				"entitlement_id":             grant.Entitlement.Id,
+				"principal_resource_type_id": grant.Principal.Id.ResourceType,
+				"principal_resource_id":      grant.Principal.Id.Resource,
+			}, nil
+		},
+		bulkGrants...,
+	)
 	if err != nil {
 		return err
 	}

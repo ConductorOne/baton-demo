@@ -14,9 +14,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.22.x
+          go-version: 1.23.x
       - name: Set up Gon
         run: brew tap conductorone/gon && brew install conductorone/gon/gon
       - name: Import Keychain Certs
@@ -41,9 +41,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.22.x
+          go-version: 1.23.x
       - name: Docker Login
         uses: docker/login-action@v1
         with:
