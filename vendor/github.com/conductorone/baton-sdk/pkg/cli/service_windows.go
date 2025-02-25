@@ -285,6 +285,7 @@ func interactiveSetup(ctx context.Context, outputFilePath string, fields []field
 		}
 
 		var input string
+		// defaultValue := vfield.DefaultValue
 		fmt.Printf("Enter %s: ", vfield.GetName())
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
