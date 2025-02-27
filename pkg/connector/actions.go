@@ -3,6 +3,9 @@ package connector
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"runtime"
+
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -31,6 +34,48 @@ var ActionSchemas = map[string]*v2.BatonActionSchema{
 			{
 				Name:        "barnacledResponse",
 				DisplayName: "Barnacled response",
+				Field:       &config.Field_StringField{},
+			},
+		},
+	},
+	"addNumbers": {
+		Name: "addNumbers",
+		Arguments: []*config.Field{
+			{
+				Name:        "number1",
+				DisplayName: "Number 1",
+				Field:       &config.Field_IntField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "number2",
+				DisplayName: "Number 2",
+				Field:       &config.Field_IntField{},
+				IsRequired:  true,
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "sum",
+				DisplayName: "Sum",
+				Field:       &config.Field_IntField{},
+			},
+		},
+	},
+	"openYouTube": {
+		Name: "openYouTube",
+		Arguments: []*config.Field{
+			{
+				Name:        "url",
+				DisplayName: "YouTube URL",
+				Field:       &config.Field_StringField{},
+				IsRequired:  false, // Not required as we'll use a default URL
+			},
+		},
+		ReturnTypes: []*config.Field{
+			{
+				Name:        "result",
+				DisplayName: "Result",
 				Field:       &config.Field_StringField{},
 			},
 		},
@@ -67,6 +112,55 @@ func (d *Demo) InvokeAction(ctx context.Context, name string, args *structpb.Str
 		if !ok {
 			return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("missing required argument barnacleMe")
 		}
+		return name, v2.BatonActionStatus_BATON_ACTION_STATUS_COMPLETE, response, nil, nil
+	case "addNumbers":
+		number1, ok := args.Fields["number1"]
+		if !ok {
+			return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("missing required argument number1")
+		}
+		number2, ok := args.Fields["number2"]
+		if !ok {
+			return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("missing required argument number2")
+		}
+		sum := number1.GetNumberValue() + number2.GetNumberValue()
+		response := &structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				"sum": structpb.NewNumberValue(sum),
+			},
+		}
+		return name, v2.BatonActionStatus_BATON_ACTION_STATUS_COMPLETE, response, nil, nil
+	case "openYouTube":
+		// Default YouTube URL (Rick Roll)
+		youtubeURL := "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+		// Check if a custom URL was provided
+		if urlValue, ok := args.Fields["url"]; ok && urlValue.GetStringValue() != "" {
+			youtubeURL = urlValue.GetStringValue()
+		}
+
+		var cmd *exec.Cmd
+		var resultMsg string
+
+		// Check if we're on macOS
+		if runtime.GOOS == "darwin" {
+			cmd = exec.Command("open", youtubeURL)
+			resultMsg = "Opening YouTube in default browser on macOS"
+		} else {
+			// For other platforms, we could add support later
+			return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("opening browser is only supported on macOS")
+		}
+
+		err := cmd.Start()
+		if err != nil {
+			return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("failed to open browser: %v", err)
+		}
+
+		response := &structpb.Struct{
+			Fields: map[string]*structpb.Value{
+				"result": structpb.NewStringValue(resultMsg),
+			},
+		}
+
 		return name, v2.BatonActionStatus_BATON_ACTION_STATUS_COMPLETE, response, nil, nil
 	default:
 		return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("action %s not found", name)
