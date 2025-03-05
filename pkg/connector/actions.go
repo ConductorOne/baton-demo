@@ -69,7 +69,7 @@ var ActionSchemas = map[string]*v2.BatonActionSchema{
 				Name:        "url",
 				DisplayName: "YouTube URL",
 				Field:       &config.Field_StringField{},
-				IsRequired:  false, // Not required as we'll use a default URL
+				IsRequired:  false,
 			},
 		},
 		ReturnTypes: []*config.Field{
@@ -122,6 +122,11 @@ func (d *Demo) InvokeAction(ctx context.Context, name string, args *structpb.Str
 		if !ok {
 			return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("missing required argument number2")
 		}
+
+		if number1.GetNumberValue() > 100 || number2.GetNumberValue() > 100 {
+			return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("numbers must be less than 100")
+		}
+
 		sum := number1.GetNumberValue() + number2.GetNumberValue()
 		response := &structpb.Struct{
 			Fields: map[string]*structpb.Value{
@@ -144,7 +149,7 @@ func (d *Demo) InvokeAction(ctx context.Context, name string, args *structpb.Str
 		// Check if we're on macOS
 		if runtime.GOOS == "darwin" {
 			cmd = exec.Command("open", youtubeURL)
-			resultMsg = "Opening YouTube in default browser on macOS"
+			resultMsg = "You've been Rick Rolled!"
 		} else {
 			// For other platforms, we could add support later
 			return "", v2.BatonActionStatus_BATON_ACTION_STATUS_FAILED, nil, nil, fmt.Errorf("opening browser is only supported on macOS")

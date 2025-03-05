@@ -108,7 +108,6 @@ func (c *fullSyncTaskHandler) HandleTask(ctx context.Context) error {
 		return c.helpers.FinishTask(ctx, nil, nil, err)
 	}
 	c1zPath := assetFile.Name()
-	l.Info("created temp c1z", zap.String("path", c1zPath))
 	err = assetFile.Close()
 	if err != nil {
 		return c.helpers.FinishTask(ctx, nil, nil, err)
