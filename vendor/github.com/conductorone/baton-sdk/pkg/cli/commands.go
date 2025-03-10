@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -22,18 +23,17 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/connectorrunner"
 	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/conductorone/baton-sdk/pkg/logging"
-	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/conductorone/baton-sdk/pkg/uotel"
 )
 
-type GetConnectorFunc func(context.Context, *viper.Viper) (types.ConnectorServer, error)
+type ContrainstSetter func(*cobra.Command, field.Configuration) error
 
-func MakeMainCommand(
+func MakeMainCommand[T field.Configurable](
 	ctx context.Context,
 	name string,
 	v *viper.Viper,
 	confschema field.Configuration,
-	getconnector GetConnectorFunc,
+	getconnector GetConnectorFunc[T],
 	opts ...connectorrunner.Option,
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
@@ -83,11 +83,6 @@ func MakeMainCommand(
 			return err
 		}
 
-		c, err := getconnector(runCtx, v)
-		if err != nil {
-			return err
-		}
-
 		daemonMode := v.GetString("client-id") != "" || isService()
 		if daemonMode {
 			if v.GetString("client-id") == "" {
@@ -126,12 +121,50 @@ func MakeMainCommand(
 					))
 			case v.GetBool("event-feed"):
 				opts = append(opts, connectorrunner.WithOnDemandEventStream())
-			case v.GetString("create-account-login") != "":
+			case v.GetString("create-account-profile") != "":
 				profileMap := v.GetStringMap("create-account-profile")
 				if profileMap == nil {
-					profileMap = make(map[string]interface{})
+					return fmt.Errorf("create-account-profile is empty or incorrectly formatted: %v", v.GetString("create-account-profile"))
+				}
+				if v.GetString("create-account-login") != "" {
+					if _, ok := profileMap["login"]; !ok {
+						profileMap["login"] = v.GetString("create-account-login")
+					}
+				}
+				if v.GetString("create-account-email") != "" {
+					if _, ok := profileMap["email"]; !ok {
+						profileMap["email"] = v.GetString("create-account-email")
+					}
+				}
+				login, email := "", ""
+				if l, ok := profileMap["login"]; ok {
+					if l, ok := l.(string); ok {
+						login = l
+					}
+				}
+				if e, ok := profileMap["email"]; ok {
+					if e, ok := e.(string); ok {
+						email = e
+					}
 				}
 				profile, err := structpb.NewStruct(profileMap)
+				if err != nil {
+					return err
+				}
+				opts = append(opts,
+					connectorrunner.WithProvisioningEnabled(),
+					connectorrunner.WithOnDemandCreateAccount(
+						v.GetString("file"),
+						login,
+						email,
+						profile,
+					))
+			case v.GetString("create-account-login") != "":
+				// should only be here if no create-account-profile is provided, so lets make one.
+				profile, err := structpb.NewStruct(map[string]any{
+					"login": v.GetString("create-account-login"),
+					"email": v.GetString("create-account-email"),
+				})
 				if err != nil {
 					return err
 				}
@@ -188,6 +221,16 @@ func MakeMainCommand(
 			opts = append(opts, connectorrunner.WithTempDir(v.GetString("c1z-temp-dir")))
 		}
 
+		t, err := MakeGenericConfiguration[T](v)
+		if err != nil {
+			return fmt.Errorf("failed to make configuration: %w", err)
+		}
+
+		c, err := getconnector(runCtx, t)
+		if err != nil {
+			return err
+		}
+
 		// NOTE(shackra): top-most in the execution flow for connectors
 		r, err := connectorrunner.NewConnectorRunner(runCtx, c, opts...)
 		if err != nil {
@@ -206,12 +249,12 @@ func MakeMainCommand(
 	}
 }
 
-func MakeGRPCServerCommand(
+func MakeGRPCServerCommand[T field.Configurable](
 	ctx context.Context,
 	name string,
 	v *viper.Viper,
 	confschema field.Configuration,
-	getconnector GetConnectorFunc,
+	getconnector GetConnectorFunc[T],
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		// NOTE(shackra): bind all the flags (persistent and
@@ -249,12 +292,16 @@ func MakeGRPCServerCommand(
 				l.Error("error shutting down otel", zap.Error(err))
 			}
 		}()
+
 		// validate required fields and relationship constraints
 		if err := field.Validate(confschema, v); err != nil {
 			return err
 		}
-
-		c, err := getconnector(runCtx, v)
+		t, err := MakeGenericConfiguration[T](v)
+		if err != nil {
+			return fmt.Errorf("failed to make configuration: %w", err)
+		}
+		c, err := getconnector(runCtx, t)
 		if err != nil {
 			return err
 		}
@@ -277,6 +324,8 @@ func MakeGRPCServerCommand(
 		case v.GetString("grant-entitlement") != "":
 			copts = append(copts, connector.WithProvisioningEnabled())
 		case v.GetString("revoke-grant") != "":
+			copts = append(copts, connector.WithProvisioningEnabled())
+		case v.GetString("create-account-profile") != "":
 			copts = append(copts, connector.WithProvisioningEnabled())
 		case v.GetString("create-account-login") != "" || v.GetString("create-account-email") != "":
 			copts = append(copts, connector.WithProvisioningEnabled())
@@ -340,12 +389,12 @@ func MakeGRPCServerCommand(
 	}
 }
 
-func MakeCapabilitiesCommand(
+func MakeCapabilitiesCommand[T field.Configurable](
 	ctx context.Context,
 	name string,
 	v *viper.Viper,
 	confschema field.Configuration,
-	getconnector GetConnectorFunc,
+	getconnector GetConnectorFunc[T],
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		// NOTE(shackra): bind all the flags (persistent and
@@ -371,8 +420,12 @@ func MakeCapabilitiesCommand(
 		if err := field.Validate(confschema, v); err != nil {
 			return err
 		}
+		t, err := MakeGenericConfiguration[T](v)
+		if err != nil {
+			return fmt.Errorf("failed to make configuration: %w", err)
+		}
 
-		c, err := getconnector(runCtx, v)
+		c, err := getconnector(runCtx, t)
 		if err != nil {
 			return err
 		}
@@ -407,6 +460,26 @@ func MakeCapabilitiesCommand(
 			return err
 		}
 
+		return nil
+	}
+}
+
+func MakeConfigSchemaCommand[T field.Configurable](
+	ctx context.Context,
+	name string,
+	v *viper.Viper,
+	confschema field.Configuration,
+	getconnector GetConnectorFunc[T],
+) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		pb, err := json.Marshal(&confschema)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprint(os.Stdout, string(pb))
+		if err != nil {
+			return err
+		}
 		return nil
 	}
 }

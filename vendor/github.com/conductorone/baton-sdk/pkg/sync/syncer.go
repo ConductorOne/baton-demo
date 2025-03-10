@@ -32,10 +32,11 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types"
 )
 
-const maxDepth = 8
-
 var tracer = otel.Tracer("baton-sdk/sync")
 
+const defaultMaxDepth int64 = 15
+
+var maxDepth, _ = strconv.ParseInt(os.Getenv("BATON_GRAPH_EXPAND_MAX_DEPTH"), 10, 64)
 var dontFixCycles, _ = strconv.ParseBool(os.Getenv("BATON_DONT_FIX_CYCLES"))
 
 var ErrSyncNotComplete = fmt.Errorf("sync exited without finishing")
@@ -180,8 +181,8 @@ type syncer struct {
 const minCheckpointInterval = 10 * time.Second
 
 // Checkpoint marshals the current state and stores it.
-func (s *syncer) Checkpoint(ctx context.Context) error {
-	if !s.lastCheckPointTime.IsZero() && time.Since(s.lastCheckPointTime) < minCheckpointInterval {
+func (s *syncer) Checkpoint(ctx context.Context, force bool) error {
+	if !force && !s.lastCheckPointTime.IsZero() && time.Since(s.lastCheckPointTime) < minCheckpointInterval {
 		return nil
 	}
 	ctx, span := tracer.Start(ctx, "syncer.Checkpoint")
@@ -342,7 +343,7 @@ func (s *syncer) Sync(ctx context.Context) error {
 
 	var warnings []error
 	for s.state.Current() != nil {
-		err = s.Checkpoint(ctx)
+		err = s.Checkpoint(ctx, false)
 		if err != nil {
 			return err
 		}
@@ -378,7 +379,7 @@ func (s *syncer) Sync(ctx context.Context) error {
 			s.state.PushAction(ctx, Action{Op: SyncResourcesOp})
 			s.state.PushAction(ctx, Action{Op: SyncResourceTypesOp})
 
-			err = s.Checkpoint(ctx)
+			err = s.Checkpoint(ctx, true)
 			if err != nil {
 				return err
 			}
@@ -446,6 +447,12 @@ func (s *syncer) Sync(ctx context.Context) error {
 		default:
 			return fmt.Errorf("unexpected sync step")
 		}
+	}
+
+	// Force a checkpoint to clear sync_token.
+	err = s.Checkpoint(ctx, true)
+	if err != nil {
+		return err
 	}
 
 	err = s.store.EndSync(ctx)
@@ -1644,11 +1651,15 @@ func (s *syncer) expandGrantsForEntitlements(ctx context.Context) error {
 		return nil
 	}
 
-	if graph.Depth > maxDepth {
+	if maxDepth == 0 {
+		maxDepth = defaultMaxDepth
+	}
+
+	if int64(graph.Depth) > maxDepth {
 		l.Error(
 			"expandGrantsForEntitlements: exceeded max depth",
 			zap.Any("graph", graph),
-			zap.Int("max_depth", maxDepth),
+			zap.Int64("max_depth", maxDepth),
 		)
 		s.state.FinishAction(ctx)
 		return fmt.Errorf("exceeded max depth")
