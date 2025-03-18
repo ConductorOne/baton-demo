@@ -34,7 +34,7 @@ import (
 
 var tracer = otel.Tracer("baton-sdk/sync")
 
-const defaultMaxDepth int64 = 15
+const defaultMaxDepth int64 = 20
 
 var maxDepth, _ = strconv.ParseInt(os.Getenv("BATON_GRAPH_EXPAND_MAX_DEPTH"), 10, 64)
 var dontFixCycles, _ = strconv.ParseBool(os.Getenv("BATON_DONT_FIX_CYCLES"))
@@ -84,12 +84,22 @@ func (p *ProgressCounts) LogResourcesProgress(ctx context.Context, resourceType 
 func (p *ProgressCounts) LogEntitlementsProgress(ctx context.Context, resourceType string) {
 	entitlementsProgress := p.EntitlementsProgress[resourceType]
 	resources := p.Resources[resourceType]
-	if resources == 0 {
-		return
-	}
-	percentComplete := (entitlementsProgress * 100) / resources
 
 	l := ctxzap.Extract(ctx)
+	if resources == 0 {
+		// if resuming sync, resource counts will be zero, so don't calculate percentage. just log every 10 seconds.
+		if time.Since(p.LastEntitlementLog[resourceType]) > maxLogFrequency {
+			l.Info("Syncing entitlements",
+				zap.String("resource_type_id", resourceType),
+				zap.Int("synced", entitlementsProgress),
+			)
+			p.LastEntitlementLog[resourceType] = time.Now()
+		}
+		return
+	}
+
+	percentComplete := (entitlementsProgress * 100) / resources
+
 	switch {
 	case entitlementsProgress > resources:
 		l.Error("more entitlement resources than resources",
@@ -118,12 +128,22 @@ func (p *ProgressCounts) LogEntitlementsProgress(ctx context.Context, resourceTy
 func (p *ProgressCounts) LogGrantsProgress(ctx context.Context, resourceType string) {
 	grantsProgress := p.GrantsProgress[resourceType]
 	resources := p.Resources[resourceType]
-	if resources == 0 {
-		return
-	}
-	percentComplete := (grantsProgress * 100) / resources
 
 	l := ctxzap.Extract(ctx)
+	if resources == 0 {
+		// if resuming sync, resource counts will be zero, so don't calculate percentage. just log every 10 seconds.
+		if time.Since(p.LastGrantLog[resourceType]) > maxLogFrequency {
+			l.Info("Syncing grants",
+				zap.String("resource_type_id", resourceType),
+				zap.Int("synced", grantsProgress),
+			)
+			p.LastGrantLog[resourceType] = time.Now()
+		}
+		return
+	}
+
+	percentComplete := (grantsProgress * 100) / resources
+
 	switch {
 	case grantsProgress > resources:
 		l.Error("more grant resources than resources",
@@ -1132,8 +1152,8 @@ func (s *syncer) SyncGrantExpansion(ctx context.Context) error {
 			l.Warn(
 				"cycle detected in entitlement graph",
 				zap.Any("cycle", cycle),
-				zap.Any("initial graph", entitlementGraph),
 			)
+			l.Debug("initial graph", zap.Any("initial graph", entitlementGraph))
 			if dontFixCycles {
 				return fmt.Errorf("cycles detected in entitlement graph")
 			}
@@ -1662,7 +1682,7 @@ func (s *syncer) expandGrantsForEntitlements(ctx context.Context) error {
 			zap.Int64("max_depth", maxDepth),
 		)
 		s.state.FinishAction(ctx)
-		return fmt.Errorf("exceeded max depth")
+		return fmt.Errorf("expandGrantsForEntitlements: exceeded max depth (%d)", maxDepth)
 	}
 
 	// TODO(morgabra) Yield here after some amount of work?
