@@ -5,7 +5,7 @@ go 1.23.4
 toolchain go1.24.1
 
 require (
-	github.com/conductorone/baton-sdk v0.2.91
+	github.com/conductorone/baton-sdk v0.2.94
 	github.com/doug-martin/goqu/v9 v9.19.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/segmentio/ksuid v1.0.4
