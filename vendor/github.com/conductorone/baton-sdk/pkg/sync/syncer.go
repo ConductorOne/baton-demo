@@ -14,8 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/conductorone/baton-sdk/pkg/bid"
 	"github.com/conductorone/baton-sdk/pkg/dotc1z"
 	"github.com/conductorone/baton-sdk/pkg/sync/expand"
+	"github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	batonGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
 	mapset "github.com/deckarep/golang-set/v2"
@@ -186,6 +188,7 @@ func (p *ProgressCounts) LogExpandProgress(ctx context.Context, actions []*expan
 
 // syncer orchestrates a connector sync and stores the results using the provided datasource.Writer.
 type syncer struct {
+	attempts                            int
 	c1zManager                          manager.Manager
 	c1zPath                             string
 	externalResourceC1ZPath             string
@@ -242,25 +245,23 @@ func (s *syncer) handleProgress(ctx context.Context, a *Action, c int) {
 	}
 }
 
-var attempts = 0
-
-func shouldWaitAndRetry(ctx context.Context, err error) bool {
+func (s *syncer) shouldWaitAndRetry(ctx context.Context, err error) bool {
 	ctx, span := tracer.Start(ctx, "syncer.shouldWaitAndRetry")
 	defer span.End()
 
 	if err == nil {
-		attempts = 0
+		s.attempts = 0
 		return true
 	}
 	if status.Code(err) != codes.Unavailable && status.Code(err) != codes.DeadlineExceeded {
 		return false
 	}
 
-	attempts++
+	s.attempts++
 	l := ctxzap.Extract(ctx)
 
 	// use linear time by default
-	var wait time.Duration = time.Duration(attempts) * time.Second
+	var wait time.Duration = time.Duration(s.attempts) * time.Second
 
 	// If error contains rate limit data, use that instead
 	if st, ok := status.FromError(err); ok {
@@ -418,14 +419,14 @@ func (s *syncer) Sync(ctx context.Context) error {
 
 		case SyncResourceTypesOp:
 			err = s.SyncResourceTypes(ctx)
-			if !shouldWaitAndRetry(ctx, err) {
+			if !s.shouldWaitAndRetry(ctx, err) {
 				return err
 			}
 			continue
 
 		case SyncResourcesOp:
 			err = s.SyncResources(ctx)
-			if !shouldWaitAndRetry(ctx, err) {
+			if !s.shouldWaitAndRetry(ctx, err) {
 				return err
 			}
 			continue
@@ -438,7 +439,7 @@ func (s *syncer) Sync(ctx context.Context) error {
 				s.state.FinishAction(ctx)
 				continue
 			}
-			if !shouldWaitAndRetry(ctx, err) {
+			if !s.shouldWaitAndRetry(ctx, err) {
 				return err
 			}
 			continue
@@ -451,20 +452,20 @@ func (s *syncer) Sync(ctx context.Context) error {
 				s.state.FinishAction(ctx)
 				continue
 			}
-			if !shouldWaitAndRetry(ctx, err) {
+			if !s.shouldWaitAndRetry(ctx, err) {
 				return err
 			}
 			continue
 
 		case SyncExternalResourcesOp:
 			err = s.SyncExternalResources(ctx)
-			if !shouldWaitAndRetry(ctx, err) {
+			if !s.shouldWaitAndRetry(ctx, err) {
 				return err
 			}
 			continue
 		case SyncAssetsOp:
 			err = s.SyncAssets(ctx)
-			if !shouldWaitAndRetry(ctx, err) {
+			if !s.shouldWaitAndRetry(ctx, err) {
 				return err
 			}
 			continue
@@ -477,7 +478,7 @@ func (s *syncer) Sync(ctx context.Context) error {
 			}
 
 			err = s.SyncGrantExpansion(ctx)
-			if !shouldWaitAndRetry(ctx, err) {
+			if !s.shouldWaitAndRetry(ctx, err) {
 				return err
 			}
 			continue
@@ -1419,7 +1420,7 @@ func (s *syncer) syncGrantsForResource(ctx context.Context, resourceID *v2.Resou
 		if grantAnnos.Contains(&v2.GrantExpandable{}) {
 			s.state.SetNeedsExpansion()
 		}
-		if grantAnnos.Contains(&v2.ExternalResourceMatchAll{}) || grantAnnos.Contains(&v2.ExternalResourceMatch{}) || grantAnnos.Contains(&v2.ExternalResourceMatchID{}) {
+		if grantAnnos.ContainsAny(&v2.ExternalResourceMatchAll{}, &v2.ExternalResourceMatch{}, &v2.ExternalResourceMatchID{}) {
 			s.state.SetHasExternalResourcesGrants()
 		}
 	}
@@ -1854,6 +1855,9 @@ func (s *syncer) processGrantsWithExternalPrincipals(ctx context.Context, princi
 
 	for _, grant := range grants {
 		annos := annotations.Annotations(grant.Annotations)
+		if !annos.ContainsAny(&v2.ExternalResourceMatchAll{}, &v2.ExternalResourceMatch{}, &v2.ExternalResourceMatchID{}) {
+			continue
+		}
 
 		// Match all
 		matchResourceMatchAllAnno, err := GetExternalResourceMatchAllAnnotation(annos)
@@ -1878,6 +1882,32 @@ func (s *syncer) processGrantsWithExternalPrincipals(ctx context.Context, princi
 			continue
 		}
 
+		expandableAnno, err := GetExpandableAnnotation(annos)
+		if err != nil {
+			return err
+		}
+		expandableEntitlementsResourceMap := make(map[string][]*v2.Entitlement)
+		if expandableAnno != nil {
+			for _, entId := range expandableAnno.EntitlementIds {
+				parsedEnt, err := bid.ParseEntitlementBid(entId)
+				if err != nil {
+					l.Error("error parsing expandable entitlement bid", zap.Any("entitlementId", entId))
+					continue
+				}
+				resourceBID, err := bid.MakeBid(parsedEnt.Resource)
+				if err != nil {
+					l.Error("error making resource bid", zap.Any("parsedEnt.Resource", parsedEnt.Resource))
+					continue
+				}
+				entitlementMap, ok := expandableEntitlementsResourceMap[resourceBID]
+				if !ok {
+					entitlementMap = make([]*v2.Entitlement, 0)
+				}
+				entitlementMap = append(entitlementMap, parsedEnt)
+				expandableEntitlementsResourceMap[resourceBID] = entitlementMap
+			}
+		}
+
 		// Match by ID
 		matchResourceMatchIDAnno, err := GetExternalResourceMatchIDAnnotation(annos)
 		if err != nil {
@@ -1887,14 +1917,45 @@ func (s *syncer) processGrantsWithExternalPrincipals(ctx context.Context, princi
 			if principal, ok := principalMap[matchResourceMatchIDAnno.Id]; ok {
 				newGrant := newGrantForExternalPrincipal(grant, principal)
 				expandedGrants = append(expandedGrants, newGrant)
+
+				newGrantAnnos := annotations.Annotations(newGrant.Annotations)
+
+				newExpandableEntitlementIDs := make([]string, 0)
+				if expandableAnno != nil {
+					groupPrincipalBID, err := bid.MakeBid(grant.Principal)
+					if err != nil {
+						l.Error("error making group principal bid", zap.Error(err), zap.Any("grant.Principal", grant.Principal))
+						continue
+					}
+
+					principalEntitlements := expandableEntitlementsResourceMap[groupPrincipalBID]
+					for _, expandableGrant := range principalEntitlements {
+						newExpandableEntId := entitlement.NewEntitlementID(principal, expandableGrant.Slug)
+						_, err := s.store.GetEntitlement(ctx, &reader_v2.EntitlementsReaderServiceGetEntitlementRequest{EntitlementId: newExpandableEntId})
+						if err != nil {
+							if errors.Is(err, sql.ErrNoRows) {
+								l.Error("found no entitlement with entitlement id generated from external source sync", zap.Any("entitlementId", newExpandableEntId))
+								continue
+							}
+							return err
+						}
+						newExpandableEntitlementIDs = append(newExpandableEntitlementIDs, newExpandableEntId)
+					}
+
+					newExpandableAnno := &v2.GrantExpandable{
+						EntitlementIds:  newExpandableEntitlementIDs,
+						Shallow:         expandableAnno.Shallow,
+						ResourceTypeIds: expandableAnno.ResourceTypeIds,
+					}
+					newGrantAnnos.Update(newExpandableAnno)
+					newGrant.Annotations = newGrantAnnos
+					expandedGrants = append(expandedGrants, newGrant)
+				}
 			}
 
 			// We still want to delete the grant even if there are no matches
 			// Since it does not correspond to any known user
 			grantsToDelete = append(grantsToDelete, grant.Id)
-			// TODO(lauren) remove continue here (and only continue if we found a principal with the ID) if we decide
-			// to support using multiple external resource match annos on a single grant (e.g id and key/val match)
-			continue
 		}
 
 		// Match by key/val
@@ -1902,6 +1963,7 @@ func (s *syncer) processGrantsWithExternalPrincipals(ctx context.Context, princi
 		if err != nil {
 			return err
 		}
+
 		if matchExternalResource != nil {
 			switch matchExternalResource.ResourceType {
 			case v2.ResourceType_TRAIT_USER:
@@ -1920,7 +1982,7 @@ func (s *syncer) processGrantsWithExternalPrincipals(ctx context.Context, princi
 						}
 					}
 					profileVal, ok := resource.GetProfileStringValue(userTrait.Profile, matchExternalResource.Key)
-					if ok && profileVal == matchExternalResource.Value {
+					if ok && strings.EqualFold(profileVal, matchExternalResource.Value) {
 						newGrant := newGrantForExternalPrincipal(grant, userPrincipal)
 						expandedGrants = append(expandedGrants, newGrant)
 					}
@@ -1933,9 +1995,41 @@ func (s *syncer) processGrantsWithExternalPrincipals(ctx context.Context, princi
 						continue
 					}
 					profileVal, ok := resource.GetProfileStringValue(groupTrait.Profile, matchExternalResource.Key)
-					if ok && profileVal == matchExternalResource.Value {
+					if ok && strings.EqualFold(profileVal, matchExternalResource.Value) {
 						newGrant := newGrantForExternalPrincipal(grant, groupPrincipal)
-						expandedGrants = append(expandedGrants, newGrant)
+						newGrantAnnos := annotations.Annotations(newGrant.Annotations)
+
+						newExpandableEntitlementIDs := make([]string, 0)
+						if expandableAnno != nil {
+							groupPrincipalBID, err := bid.MakeBid(grant.Principal)
+							if err != nil {
+								l.Error("error making group principal bid", zap.Error(err), zap.Any("grant.Principal", grant.Principal))
+								continue
+							}
+
+							principalEntitlements := expandableEntitlementsResourceMap[groupPrincipalBID]
+							for _, expandableGrant := range principalEntitlements {
+								newExpandableEntId := entitlement.NewEntitlementID(groupPrincipal, expandableGrant.Slug)
+								_, err := s.store.GetEntitlement(ctx, &reader_v2.EntitlementsReaderServiceGetEntitlementRequest{EntitlementId: newExpandableEntId})
+								if err != nil {
+									if errors.Is(err, sql.ErrNoRows) {
+										l.Error("found no entitlement with entitlement id generated from external source sync", zap.Any("entitlementId", newExpandableEntId))
+										continue
+									}
+									return err
+								}
+								newExpandableEntitlementIDs = append(newExpandableEntitlementIDs, newExpandableEntId)
+							}
+
+							newExpandableAnno := &v2.GrantExpandable{
+								EntitlementIds:  newExpandableEntitlementIDs,
+								Shallow:         expandableAnno.Shallow,
+								ResourceTypeIds: expandableAnno.ResourceTypeIds,
+							}
+							newGrantAnnos.Update(newExpandableAnno)
+							newGrant.Annotations = newGrantAnnos
+							expandedGrants = append(expandedGrants, newGrant)
+						}
 					}
 				}
 			default:
@@ -1966,8 +2060,6 @@ func (s *syncer) processGrantsWithExternalPrincipals(ctx context.Context, princi
 			return err
 		}
 	}
-
-	s.state.FinishAction(ctx)
 
 	return nil
 }
@@ -2014,6 +2106,15 @@ func GetExternalResourceMatchIDAnnotation(annos annotations.Annotations) (*v2.Ex
 		return nil, err
 	}
 	return externalResourceMatchID, nil
+}
+
+func GetExpandableAnnotation(annos annotations.Annotations) (*v2.GrantExpandable, error) {
+	expandableAnno := &v2.GrantExpandable{}
+	ok, err := annos.Pick(expandableAnno)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return expandableAnno, nil
 }
 
 func (s *syncer) runGrantExpandActions(ctx context.Context) (bool, error) {
