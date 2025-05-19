@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/spf13/cobra"
@@ -24,6 +25,10 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/conductorone/baton-sdk/pkg/logging"
 	"github.com/conductorone/baton-sdk/pkg/uotel"
+)
+
+const (
+	otelShutdownTimeout = 5 * time.Second
 )
 
 type ContrainstSetter func(*cobra.Command, field.Configuration) error
@@ -64,7 +69,9 @@ func MakeMainCommand[T field.Configurable](
 			if otelShutdown == nil {
 				return
 			}
-			err := otelShutdown(context.Background())
+			shutdownCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(otelShutdownTimeout))
+			defer cancel()
+			err := otelShutdown(shutdownCtx)
 			if err != nil {
 				zap.L().Error("error shutting down otel", zap.Error(err))
 			}
@@ -212,6 +219,28 @@ func MakeMainCommand[T field.Configurable](
 				opts = append(opts,
 					connectorrunner.WithTicketingEnabled(),
 					connectorrunner.WithGetTicket(v.GetString("ticket-id")))
+			case len(v.GetStringSlice("sync-resources")) > 0:
+				opts = append(opts,
+					connectorrunner.WithTargetedSyncResourceIDs(v.GetStringSlice("sync-resources")),
+					connectorrunner.WithOnDemandSync(v.GetString("file")),
+				)
+			case v.GetBool("diff-syncs"):
+				opts = append(opts,
+					connectorrunner.WithDiffSyncs(
+						v.GetString("file"),
+						v.GetString("base-sync-id"),
+						v.GetString("applied-sync-id"),
+					),
+				)
+			case v.GetBool("compact-syncs"):
+				opts = append(opts,
+					connectorrunner.WithSyncCompactor(
+						v.GetString("compact-output-path"),
+						v.GetStringSlice("compact-file-paths"),
+						v.GetStringSlice("compact-sync-ids"),
+					),
+				)
+
 			default:
 				opts = append(opts, connectorrunner.WithOnDemandSync(v.GetString("file")))
 			}
@@ -332,7 +361,12 @@ func MakeGRPCServerCommand[T field.Configurable](
 			return err
 		}
 		defer func() {
-			err := otelShutdown(context.Background())
+			if otelShutdown == nil {
+				return
+			}
+			shutdownCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(otelShutdownTimeout))
+			defer cancel()
+			err := otelShutdown(shutdownCtx)
 			if err != nil {
 				zap.L().Error("error shutting down otel", zap.Error(err))
 			}
@@ -389,6 +423,8 @@ func MakeGRPCServerCommand[T field.Configurable](
 			copts = append(copts, connector.WithTicketingEnabled())
 		case v.GetBool("get-ticket"):
 			copts = append(copts, connector.WithTicketingEnabled())
+		case len(v.GetStringSlice("sync-resources")) > 0:
+			copts = append(copts, connector.WithTargetedSyncResourceIDs(v.GetStringSlice("sync-resources")))
 		}
 
 		cw, err := connector.NewWrapper(runCtx, c, copts...)
