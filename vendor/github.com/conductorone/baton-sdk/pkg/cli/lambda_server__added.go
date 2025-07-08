@@ -36,7 +36,7 @@ func OptionallyAddLambdaCommand[T field.Configurable](
 	connectorSchema field.Configuration,
 	mainCmd *cobra.Command,
 ) error {
-	lambdaSchema := field.NewConfiguration(field.LambdaServerFields(), field.LambdaServerRelationships...)
+	lambdaSchema := field.NewConfiguration(field.LambdaServerFields(), field.WithConstraints(field.LambdaServerRelationships...))
 
 	lambdaCmd, err := AddCommand(mainCmd, v, &lambdaSchema, &cobra.Command{
 		Use:           "lambda",
@@ -74,7 +74,7 @@ func OptionallyAddLambdaCommand[T field.Configurable](
 			return err
 		}
 
-		runCtx, otelShutdown, err := initOtel(context.Background(), name, v, initalLogFields)
+		runCtx, otelShutdown, err := initOtel(runCtx, name, v, initalLogFields)
 		if err != nil {
 			return err
 		}
