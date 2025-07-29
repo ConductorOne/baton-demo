@@ -1,6 +1,12 @@
 package field
 
-import "github.com/conductorone/baton-sdk/pkg/logging"
+import (
+	"os"
+	"time"
+
+	"github.com/conductorone/baton-sdk/pkg/logging"
+	"golang.org/x/term"
+)
 
 const (
 	OtelCollectorEndpointFieldName            = "otel-collector-endpoint"
@@ -11,6 +17,14 @@ const (
 	OtelLoggingDisabledFieldName              = "otel-logging-disabled"
 )
 
+func defaultLogFormat() any {
+	// If stdout is a TTY, use console format, otherwise use JSON
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		return logging.LogFormatConsole
+	}
+	return logging.LogFormatJSON
+}
+
 var (
 	createTicketField           = BoolField("create-ticket", WithHidden(true), WithDescription("Create ticket"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	bulkCreateTicketField       = BoolField("bulk-create-ticket", WithHidden(true), WithDescription("Bulk create tickets"), WithPersistent(true), WithExportTarget(ExportTargetNone))
@@ -20,7 +34,11 @@ var (
 	ListTicketSchemasField = BoolField("list-ticket-schemas", WithHidden(true), WithDescription("List ticket schemas"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	provisioningField      = BoolField("provisioning", WithShortHand("p"), WithDescription("This must be set in order for provisioning actions to be enabled"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
-	TicketingField = BoolField("ticketing", WithDescription("This must be set to enable ticketing support"), WithPersistent(true), WithExportTarget(ExportTargetNone))
+	TicketingField = BoolField("ticketing",
+		WithDisplayName("Enable external ticket provisioning"),
+		WithDescription("This must be set to enable ticketing support"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone))
 	c1zTmpDirField = StringField("c1z-temp-dir", WithHidden(true), WithDescription("The directory to store temporary files in. It must exist, "+
 		"and write access is required. Defaults to the OS temporary directory."), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	clientIDField             = StringField("client-id", WithDescription("The client ID used to authenticate with ConductorOne"), WithPersistent(true), WithExportTarget(ExportTargetNone))
@@ -34,7 +52,14 @@ var (
 	deleteResourceField     = StringField("delete-resource", WithHidden(true), WithDescription("The id of the resource to delete"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	deleteResourceTypeField = StringField("delete-resource-type", WithHidden(true), WithDescription("The type of the resource to delete"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	eventFeedField          = StringField("event-feed", WithHidden(true), WithDescription("Read feed events to stdout"), WithPersistent(true), WithExportTarget(ExportTargetNone))
-	fileField               = StringField("file", WithShortHand("f"), WithDefaultValue("sync.c1z"), WithDescription("The path to the c1z file to sync with"),
+	eventFeedIdField        = StringField("event-feed-id", WithHidden(true), WithDescription("The id of the event feed to read events from"), WithPersistent(true), WithExportTarget(ExportTargetNone))
+	eventFeedStartAtField   = StringField("event-feed-start-at",
+		WithDefaultValue(time.Now().AddDate(0, 0, -1).Format(time.RFC3339)),
+		WithHidden(true),
+		WithDescription("The start time of the event feed to read events from"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone))
+	fileField = StringField("file", WithShortHand("f"), WithDefaultValue("sync.c1z"), WithDescription("The path to the c1z file to sync with"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
 	grantEntitlementField = StringField("grant-entitlement", WithHidden(true), WithDescription("The id of the entitlement to grant to the supplied principal"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
@@ -42,7 +67,7 @@ var (
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
 	grantPrincipalTypeField = StringField("grant-principal-type", WithHidden(true), WithDescription("The resource type of the principal to grant the entitlement to"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
-	logFormatField = StringField("log-format", WithDefaultValue(logging.LogFormatJSON), WithDescription("The output format for logs: json, console"),
+	logFormatField = StringField("log-format", WithDefaultValueFunc(defaultLogFormat), WithDescription("The output format for logs: json, console"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
 	revokeGrantField       = StringField("revoke-grant", WithHidden(true), WithDescription("The grant to revoke"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	rotateCredentialsField = StringField("rotate-credentials", WithHidden(true), WithDescription("The id of the resource to rotate credentials on"),
@@ -193,6 +218,8 @@ var DefaultFields = []SchemaField{
 	deleteResourceField,
 	deleteResourceTypeField,
 	eventFeedField,
+	eventFeedIdField,
+	eventFeedStartAtField,
 	fileField,
 	grantEntitlementField,
 	grantPrincipalField,
