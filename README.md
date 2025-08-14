@@ -9,7 +9,7 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more about the
 # Getting Started
 ## brew
 ```
-brew install conductor/baton/baton conductor/baton/baton-demo
+brew install conductorone/baton/baton conductorone/baton/baton-demo
 
 baton-demo
 baton resources
