@@ -159,11 +159,7 @@ func (c *connectorRunner) run(ctx context.Context) error {
 			// Acquire a worker slot before we call Next() so we don't claim a task before we can actually process it.
 			err = sem.Acquire(ctx, 1)
 			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					// Any error returned from Acquire() is due to the context being cancelled.
-					// Except for some tests where error is context deadline exceeded
-					sem.Release(1)
-				}
+				l.Error("runner: error acquiring semaphore to claim worker", zap.Error(err))
 				return c.handleContextCancel(ctx)
 			}
 			l.Debug("runner: worker claimed, checking for next task")
@@ -287,6 +283,11 @@ type createAccountConfig struct {
 	profile *structpb.Struct
 }
 
+type invokeActionConfig struct {
+	action string
+	args   *structpb.Struct
+}
+
 type deleteResourceConfig struct {
 	resourceId   string
 	resourceType string
@@ -297,7 +298,10 @@ type rotateCredentialsConfig struct {
 	resourceType string
 }
 
-type eventStreamConfig struct{}
+type eventStreamConfig struct {
+	feedId  string
+	startAt time.Time
+}
 
 type syncDifferConfig struct {
 	baseSyncID    string
@@ -320,11 +324,13 @@ type runnerConfig struct {
 	clientSecret                        string
 	provisioningEnabled                 bool
 	ticketingEnabled                    bool
+	actionsEnabled                      bool
 	grantConfig                         *grantConfig
 	revokeConfig                        *revokeConfig
 	eventFeedConfig                     *eventStreamConfig
 	tempDir                             string
 	createAccountConfig                 *createAccountConfig
+	invokeActionConfig                  *invokeActionConfig
 	deleteResourceConfig                *deleteResourceConfig
 	rotateCredentialsConfig             *rotateCredentialsConfig
 	createTicketConfig                  *createTicketConfig
@@ -460,6 +466,18 @@ func WithOnDemandCreateAccount(c1zPath string, login string, email string, profi
 	}
 }
 
+func WithOnDemandInvokeAction(c1zPath string, action string, args *structpb.Struct) Option {
+	return func(ctx context.Context, cfg *runnerConfig) error {
+		cfg.onDemand = true
+		cfg.c1zPath = c1zPath
+		cfg.invokeActionConfig = &invokeActionConfig{
+			action: action,
+			args:   args,
+		}
+		return nil
+	}
+}
+
 func WithOnDemandDeleteResource(c1zPath string, resourceId string, resourceType string) Option {
 	return func(ctx context.Context, cfg *runnerConfig) error {
 		cfg.onDemand = true
@@ -492,10 +510,13 @@ func WithOnDemandSync(c1zPath string) Option {
 	}
 }
 
-func WithOnDemandEventStream() Option {
+func WithOnDemandEventStream(feedId string, startAt time.Time) Option {
 	return func(ctx context.Context, cfg *runnerConfig) error {
 		cfg.onDemand = true
-		cfg.eventFeedConfig = &eventStreamConfig{}
+		cfg.eventFeedConfig = &eventStreamConfig{
+			feedId:  feedId,
+			startAt: startAt,
+		}
 		return nil
 	}
 }
@@ -503,6 +524,13 @@ func WithOnDemandEventStream() Option {
 func WithProvisioningEnabled() Option {
 	return func(ctx context.Context, cfg *runnerConfig) error {
 		cfg.provisioningEnabled = true
+		return nil
+	}
+}
+
+func WithActionsEnabled() Option {
+	return func(ctx context.Context, cfg *runnerConfig) error {
+		cfg.actionsEnabled = true
 		return nil
 	}
 }
@@ -677,6 +705,9 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 		case cfg.createAccountConfig != nil:
 			tm = local.NewCreateAccountManager(ctx, cfg.c1zPath, cfg.createAccountConfig.login, cfg.createAccountConfig.email, cfg.createAccountConfig.profile)
 
+		case cfg.invokeActionConfig != nil:
+			tm = local.NewActionInvoker(ctx, cfg.c1zPath, cfg.invokeActionConfig.action, cfg.invokeActionConfig.args)
+
 		case cfg.deleteResourceConfig != nil:
 			tm = local.NewResourceDeleter(ctx, cfg.c1zPath, cfg.deleteResourceConfig.resourceId, cfg.deleteResourceConfig.resourceType)
 
@@ -684,7 +715,7 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 			tm = local.NewCredentialRotator(ctx, cfg.c1zPath, cfg.rotateCredentialsConfig.resourceId, cfg.rotateCredentialsConfig.resourceType)
 
 		case cfg.eventFeedConfig != nil:
-			tm = local.NewEventFeed(ctx)
+			tm = local.NewEventFeed(ctx, cfg.eventFeedConfig.feedId, cfg.eventFeedConfig.startAt)
 		case cfg.createTicketConfig != nil:
 			tm = local.NewTicket(ctx, cfg.createTicketConfig.templatePath)
 		case cfg.listTicketSchemasConfig != nil:
