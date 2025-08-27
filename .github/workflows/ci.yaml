@@ -59,7 +59,7 @@ jobs:
       - name: Grant/revoke
         uses: ConductorOne/github-workflows/actions/sync-test@v2
         with:
-          connector: ./baton-http
+          connector: ./baton-demo
           baton-entitlement: 'group:2IC0WjepYDBsRp6b7cqrumGsVGt:member'
           baton-principal: '2IC0Wn7DaxV1xqDpdg7jJRiPtCp'
           baton-principal-type: 'user'
