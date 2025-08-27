@@ -11,6 +11,8 @@ import (
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -143,7 +145,7 @@ func (o *roleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.
 		}
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("baton-demo: unknown resource type")
+		return nil, status.Errorf(codes.InvalidArgument, "unknown resource type")
 	}
 }
 

@@ -103,22 +103,14 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, pID))
-
-		// Look up group and iterate its members
-		grp, err := o.client.GetGroup(ctx, grpID)
-		if err != nil {
-			return nil, "", nil, err
+		entitlementIDs := []string{
+			fmt.Sprintf("group:%s:member", grpID),
+			fmt.Sprintf("group:%s:admin", grpID),
 		}
-
-		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdkResource.NewResourceID(userResourceType, userID)
-			if err != nil {
-				return nil, "", nil, err
-			}
-
-			ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, pID))
-		}
+		grant := sdkGrant.NewGrant(resource, projectAccessEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+			EntitlementIds: entitlementIDs,
+		}))
+		ret = append(ret, grant)
 	}
 
 	return ret, "", nil, nil

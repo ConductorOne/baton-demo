@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 
 	"github.com/doug-martin/goqu/v9"
@@ -416,8 +417,12 @@ func (c *Client) ListGroups(ctx context.Context) ([]*Group, error) {
 			return nil, err
 		}
 
-		group.Admins = strings.Split(admins, ",")
-		group.Members = strings.Split(members, ",")
+		if admins != "" {
+			group.Admins = strings.Split(admins, ",")
+		}
+		if members != "" {
+			group.Members = strings.Split(members, ",")
+		}
 		groupsList = append(groupsList, group)
 	}
 
@@ -449,8 +454,12 @@ func (c *Client) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 		return nil, err
 	}
 
-	group.Admins = strings.Split(admins, ",")
-	group.Members = strings.Split(members, ",")
+	if admins != "" {
+		group.Admins = strings.Split(admins, ",")
+	}
+	if members != "" {
+		group.Members = strings.Split(members, ",")
+	}
 
 	return group, nil
 }
@@ -556,16 +565,9 @@ func (c *Client) GrantGroupAdmin(ctx context.Context, groupID, userID string) er
 		return err
 	}
 
-	user, err := c.GetUser(ctx, userID)
-	if err != nil {
-		return err
-	}
-
 	// Check whether the user is already an admin of the group
-	for _, u := range group.Admins {
-		if u == user.Id {
-			return nil
-		}
+	if slices.Contains(group.Admins, userID) {
+		return nil
 	}
 
 	group.Admins = append(group.Admins, userID)
@@ -665,8 +667,12 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, error) {
 			return nil, err
 		}
 
-		role.DirectAssignments = strings.Split(directAssignments, ",")
-		role.GroupAssignments = strings.Split(groupAssignments, ",")
+		if directAssignments != "" {
+			role.DirectAssignments = strings.Split(directAssignments, ",")
+		}
+		if groupAssignments != "" {
+			role.GroupAssignments = strings.Split(groupAssignments, ",")
+		}
 		rolesList = append(rolesList, role)
 	}
 
@@ -698,8 +704,12 @@ func (c *Client) GetRole(ctx context.Context, roleID string) (*Role, error) {
 		return nil, err
 	}
 
-	role.DirectAssignments = strings.Split(directAssignments, ",")
-	role.GroupAssignments = strings.Split(groupAssignments, ",")
+	if directAssignments != "" {
+		role.DirectAssignments = strings.Split(directAssignments, ",")
+	}
+	if groupAssignments != "" {
+		role.GroupAssignments = strings.Split(groupAssignments, ",")
+	}
 
 	return role, nil
 }
@@ -723,10 +733,8 @@ func (c *Client) GrantRole(ctx context.Context, userID, roleID string) error {
 	}
 
 	// Check if the user is already assigned the role
-	for _, u := range role.DirectAssignments {
-		if u == userID {
-			return nil
-		}
+	if slices.Contains(role.DirectAssignments, userID) {
+		return nil
 	}
 
 	// Update the role with the user

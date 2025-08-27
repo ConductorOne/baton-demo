@@ -12,6 +12,8 @@ import (
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -161,18 +163,28 @@ func (o *groupBuilder) Grant(ctx context.Context, principal *v2.Resource, entitl
 }
 
 func (o *groupBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
-	role := grant.Entitlement.Resource.Id.Resource
-	userID := grant.Principal.Id.Resource
+	group := grant.Entitlement.Resource.Id.Resource
+	principalId := grant.Principal.Id
 
-	switch grant.Entitlement.Resource.Id.ResourceType {
-	case roleResourceType.Id:
-		err := o.client.RevokeRole(ctx, userID, role)
+	if principalId.ResourceType != userResourceType.Id {
+		return nil, status.Errorf(codes.InvalidArgument, "only users can have group memberships revoked")
+	}
+
+	switch grant.Entitlement.Slug {
+	case groupMemberEntitlement:
+		err := o.client.RevokeGroupMember(ctx, group, principalId.Resource)
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case groupAdminEntitlement:
+		err := o.client.RevokeGroupAdmin(ctx, group, principalId.Resource)
 		if err != nil {
 			return nil, err
 		}
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("baton-demo: unknown resource type")
+		return nil, status.Errorf(codes.InvalidArgument, "unknown entitlement")
 	}
 }
 
