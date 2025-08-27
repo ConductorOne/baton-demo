@@ -98,23 +98,14 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
-
-		// Look up group and iterate its members
-		grp, err := o.client.GetGroup(ctx, grpID)
-		if err != nil {
-			return nil, "", nil, err
+		entitlementIDs := []string{
+			fmt.Sprintf("group:%s:member", grpID),
+			fmt.Sprintf("group:%s:admin", grpID),
 		}
-
-		// Grant all admins and members the assignment entitlement
-		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdkResource.NewResourceID(userResourceType, userID)
-			if err != nil {
-				return nil, "", nil, err
-			}
-
-			ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
-		}
+		grant := sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+			EntitlementIds: entitlementIDs,
+		}))
+		ret = append(ret, grant)
 	}
 
 	return ret, "", nil, nil
