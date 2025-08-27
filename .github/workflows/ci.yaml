@@ -1,5 +1,10 @@
 name: ci
-on: pull_request
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches:
+      - main
 jobs:
   go-lint:
     runs-on: ubuntu-latest
@@ -7,7 +12,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.23.x
+          go-version: 1.24.x
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Run linters
@@ -18,7 +23,7 @@ jobs:
   go-test:
     strategy:
       matrix:
-        go-version: [1.23.x]
+        go-version: [1.24.x]
         platform: [ubuntu-latest]
     runs-on: ${{ matrix.platform }}
     steps:
