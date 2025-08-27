@@ -27,6 +27,21 @@ func (o *groupBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return groupResourceType
 }
 
+func groupResource(g *client.Group, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	// Group traits can contain arbitrary profile data
+	profile := make(map[string]any)
+	profile["group_color"] = "green"
+	profile["group_size"] = len(g.Members) + len(g.Admins)
+
+	return sdkResource.NewGroupResource(
+		g.Name,
+		groupResourceType,
+		g.Id,
+		[]sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(profile)},
+		sdkResource.WithParentResourceID(parentResourceID),
+	)
+}
+
 // List returns all the groups from the database as resource objects.
 // Groups include the GroupTrait because they have the 'shape' of the well known Group type.
 func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
@@ -37,17 +52,7 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 
 	var ret []*v2.Resource
 	for _, g := range groups {
-		// Group traits can contain arbitrary profile data
-		profile := make(map[string]interface{})
-		profile["group_color"] = "green"
-
-		group, err := sdkResource.NewGroupResource(
-			g.Name,
-			groupResourceType,
-			g.Id,
-			[]sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(profile)},
-			sdkResource.WithParentResourceID(parentResourceID),
-		)
+		group, err := groupResource(g, parentResourceID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -55,6 +60,18 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	}
 
 	return ret, "", nil, nil
+}
+
+func (o *groupBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	group, err := o.client.GetGroup(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+	resource, err := groupResource(group, parentResourceId)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resource, nil, nil
 }
 
 // Entitlements returns a membership and admin entitlement.

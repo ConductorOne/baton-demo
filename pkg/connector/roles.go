@@ -25,6 +25,10 @@ func (o *roleBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return roleResourceType
 }
 
+func roleResource(r *client.Role, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	return sdkResource.NewRoleResource(r.Name, roleResourceType, r.Id, nil, sdkResource.WithParentResourceID(parentResourceID))
+}
+
 // List returns all the roles from the database as resource objects
 // Roles include the role trait because they have the 'shape' of the well known Role type.
 func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
@@ -35,7 +39,7 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var ret []*v2.Resource
 	for _, r := range roles {
-		role, err := sdkResource.NewRoleResource(r.Name, roleResourceType, r.Id, nil, sdkResource.WithParentResourceID(parentResourceID))
+		role, err := roleResource(r, parentResourceID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -43,6 +47,19 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	return ret, "", nil, nil
+}
+
+func (o *roleBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	role, err := o.client.GetRole(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resource, err := roleResource(role, parentResourceId)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resource, nil, nil
 }
 
 // Entitlements returns an assignment entitlement.

@@ -23,6 +23,18 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
 }
 
+func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	return sdkResource.NewUserResource(
+		u.Name,
+		userResourceType,
+		u.Id,
+		[]sdkResource.UserTraitOption{
+			sdkResource.WithEmail(u.Email, true),
+		},
+		sdkResource.WithParentResourceID(parentResourceID),
+	)
+}
+
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
 func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
@@ -33,9 +45,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var ret []*v2.Resource
 	for _, u := range users {
-		userResource, err := sdkResource.NewUserResource(u.Name, userResourceType, u.Id, []sdkResource.UserTraitOption{
-			sdkResource.WithEmail(u.Email, true),
-		}, sdkResource.WithParentResourceID(parentResourceID))
+		userResource, err := userResource(u, parentResourceID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -44,6 +54,18 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	return ret, "", nil, nil
+}
+
+func (o *userBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	user, err := o.client.GetUser(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+	resource, err := userResource(user, parentResourceId)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resource, nil, nil
 }
 
 // Entitlements always returns an empty slice for users.
@@ -97,10 +119,6 @@ func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, cre
 	return []*v2.PlaintextData{ptd}, nil, nil
 }
 
-func (o *userBuilder) makeResource(ctx context.Context, user *client.User) (*v2.Resource, error) {
-	return sdkResource.NewUserResource(user.Name, userResourceType, user.Id, nil)
-}
-
 func (o *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
 	return &v2.CredentialDetailsAccountProvisioning{
 		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
@@ -139,7 +157,7 @@ func (o *userBuilder) CreateAccount(
 		return nil, nil, nil, err
 	}
 
-	resource, err := o.makeResource(ctx, createdUser)
+	resource, err := userResource(createdUser, nil)
 	if err != nil {
 		return nil, nil, nil, err
 	}
