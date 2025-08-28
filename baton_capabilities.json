@@ -11,6 +11,7 @@
       },
       "capabilities": [
         "CAPABILITY_SYNC",
+        "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION"
       ]
     },
@@ -20,7 +21,8 @@
         "displayName": "Project"
       },
       "capabilities": [
-        "CAPABILITY_SYNC"
+        "CAPABILITY_SYNC",
+        "CAPABILITY_TARGETED_SYNC"
       ]
     },
     {
@@ -33,6 +35,7 @@
       },
       "capabilities": [
         "CAPABILITY_SYNC",
+        "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION"
       ]
     },
@@ -42,10 +45,16 @@
         "displayName": "User",
         "traits": [
           "TRAIT_USER"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          }
         ]
       },
       "capabilities": [
         "CAPABILITY_SYNC",
+        "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION",
         "CAPABILITY_ACCOUNT_PROVISIONING",
         "CAPABILITY_CREDENTIAL_ROTATION",
@@ -61,7 +70,8 @@
     "CAPABILITY_CREDENTIAL_ROTATION",
     "CAPABILITY_RESOURCE_CREATE",
     "CAPABILITY_RESOURCE_DELETE",
-    "CAPABILITY_ACTIONS"
+    "CAPABILITY_ACTIONS",
+    "CAPABILITY_TARGETED_SYNC"
   ],
   "credentialDetails": {
     "capabilityAccountProvisioning": {
