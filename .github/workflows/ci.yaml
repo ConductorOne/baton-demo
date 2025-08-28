@@ -1,5 +1,10 @@
 name: ci
-on: pull_request
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches:
+      - main
 jobs:
   go-lint:
     runs-on: ubuntu-latest
@@ -7,7 +12,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.23.x
+          go-version: 1.24.x
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Run linters
@@ -18,7 +23,7 @@ jobs:
   go-test:
     strategy:
       matrix:
-        go-version: [1.23.x]
+        go-version: [1.24.x]
         platform: [ubuntu-latest]
     runs-on: ${{ matrix.platform }}
     steps:
@@ -36,3 +41,25 @@ jobs:
         uses: guyarb/golang-test-annotations@v0.6.0
         with:
           test-results: test.json
+  sync-test:
+    runs-on: ubuntu-latest
+    env:
+      BATON_LOG_LEVEL: debug
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build baton-demo
+        run: go build ./cmd/baton-demo
+      - name: Initialize database
+        run: ./baton-demo --init-db
+      - name: Grant/revoke
+        uses: ConductorOne/github-workflows/actions/sync-test@v2
+        with:
+          connector: ./baton-demo
+          baton-entitlement: 'group:2IC0WjepYDBsRp6b7cqrumGsVGt:member'
+          baton-principal: '2IC0Wn7DaxV1xqDpdg7jJRiPtCp'
+          baton-principal-type: 'user'

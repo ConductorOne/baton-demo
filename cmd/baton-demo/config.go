@@ -13,4 +13,4 @@ var relationships = []field.SchemaFieldRelationship{}
 
 var configuration = field.NewConfiguration([]field.SchemaField{
 	dbFile, initDB,
-}, relationships...)
+}, field.WithConstraints(relationships...))

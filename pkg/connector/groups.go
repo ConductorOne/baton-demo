@@ -12,6 +12,8 @@ import (
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -27,6 +29,21 @@ func (o *groupBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return groupResourceType
 }
 
+func groupResource(g *client.Group, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	// Group traits can contain arbitrary profile data
+	profile := make(map[string]any)
+	profile["group_color"] = "green"
+	profile["group_size"] = len(g.Members) + len(g.Admins)
+
+	return sdkResource.NewGroupResource(
+		g.Name,
+		groupResourceType,
+		g.Id,
+		[]sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(profile)},
+		sdkResource.WithParentResourceID(parentResourceID),
+	)
+}
+
 // List returns all the groups from the database as resource objects.
 // Groups include the GroupTrait because they have the 'shape' of the well known Group type.
 func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
@@ -37,17 +54,7 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 
 	var ret []*v2.Resource
 	for _, g := range groups {
-		// Group traits can contain arbitrary profile data
-		profile := make(map[string]interface{})
-		profile["group_color"] = "green"
-
-		group, err := sdkResource.NewGroupResource(
-			g.Name,
-			groupResourceType,
-			g.Id,
-			[]sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(profile)},
-			sdkResource.WithParentResourceID(parentResourceID),
-		)
+		group, err := groupResource(g, parentResourceID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -55,6 +62,18 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 	}
 
 	return ret, "", nil, nil
+}
+
+func (o *groupBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	group, err := o.client.GetGroup(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+	resource, err := groupResource(group, parentResourceId)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resource, nil, nil
 }
 
 // Entitlements returns a membership and admin entitlement.
@@ -144,18 +163,28 @@ func (o *groupBuilder) Grant(ctx context.Context, principal *v2.Resource, entitl
 }
 
 func (o *groupBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
-	role := grant.Entitlement.Resource.Id.Resource
-	userID := grant.Principal.Id.Resource
+	group := grant.Entitlement.Resource.Id.Resource
+	principalId := grant.Principal.Id
 
-	switch grant.Entitlement.Resource.Id.ResourceType {
-	case roleResourceType.Id:
-		err := o.client.RevokeRole(ctx, userID, role)
+	if principalId.ResourceType != userResourceType.Id {
+		return nil, status.Errorf(codes.InvalidArgument, "only users can have group memberships revoked")
+	}
+
+	switch grant.Entitlement.Slug {
+	case groupMemberEntitlement:
+		err := o.client.RevokeGroupMember(ctx, group, principalId.Resource)
+		if err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case groupAdminEntitlement:
+		err := o.client.RevokeGroupAdmin(ctx, group, principalId.Resource)
 		if err != nil {
 			return nil, err
 		}
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("baton-demo: unknown resource type")
+		return nil, status.Errorf(codes.InvalidArgument, "unknown entitlement")
 	}
 }
 

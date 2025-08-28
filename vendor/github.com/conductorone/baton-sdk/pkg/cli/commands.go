@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -131,7 +132,7 @@ func MakeMainCommand[T field.Configurable](
 						v.GetString("revoke-grant"),
 					))
 			case v.GetBool("event-feed"):
-				opts = append(opts, connectorrunner.WithOnDemandEventStream())
+				opts = append(opts, connectorrunner.WithOnDemandEventStream(v.GetString("event-feed-id"), v.GetTime("event-feed-start-at")))
 			case v.GetString("create-account-profile") != "":
 				profileMap := v.GetStringMap("create-account-profile")
 				if profileMap == nil {
@@ -186,6 +187,26 @@ func MakeMainCommand[T field.Configurable](
 						v.GetString("create-account-login"),
 						v.GetString("create-account-email"),
 						profile,
+					))
+			case v.GetString("invoke-action") != "":
+				invokeActionArgsStr := v.GetString("invoke-action-args")
+				invokeActionArgs := map[string]any{}
+				if invokeActionArgsStr != "" {
+					err := json.Unmarshal([]byte(invokeActionArgsStr), &invokeActionArgs)
+					if err != nil {
+						return fmt.Errorf("failed to parse invoke-action-args: %w", err)
+					}
+				}
+				invokeActionArgsStruct, err := structpb.NewStruct(invokeActionArgs)
+				if err != nil {
+					return fmt.Errorf("failed to parse invoke-action-args: %w", err)
+				}
+				opts = append(opts,
+					connectorrunner.WithActionsEnabled(),
+					connectorrunner.WithOnDemandInvokeAction(
+						v.GetString("file"),
+						v.GetString("invoke-action"),
+						invokeActionArgsStruct,
 					))
 			case v.GetString("delete-resource") != "":
 				opts = append(opts,
@@ -268,6 +289,8 @@ func MakeMainCommand[T field.Configurable](
 			opts = append(opts, connectorrunner.WithExternalResourceEntitlementFilter(externalResourceEntitlementIdFilter))
 		}
 
+		opts = append(opts, connectorrunner.WithSkipEntitlementsAndGrants(v.GetBool("skip-entitlements-and-grants")))
+
 		t, err := MakeGenericConfiguration[T](v)
 		if err != nil {
 			return fmt.Errorf("failed to make configuration: %w", err)
@@ -326,7 +349,7 @@ func initOtel(ctx context.Context, name string, v *viper.Viper, initialLogFields
 		otelOpts = append(otelOpts, uotel.WithOtelEndpoint(otelEndpoint, otelTLSCertPath, otelTLSCert))
 	}
 
-	return uotel.InitOtel(context.Background(), otelOpts...)
+	return uotel.InitOtel(ctx, otelOpts...)
 }
 
 func MakeGRPCServerCommand[T field.Configurable](
@@ -556,7 +579,13 @@ func MakeConfigSchemaCommand[T field.Configurable](
 	getconnector GetConnectorFunc[T],
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		pb, err := json.Marshal(&confschema)
+		// Sort fields by FieldName
+		sort.Slice(confschema.Fields, func(i, j int) bool {
+			return confschema.Fields[i].FieldName < confschema.Fields[j].FieldName
+		})
+
+		// Use MarshalIndent for pretty printing
+		pb, err := json.MarshalIndent(&confschema, "", "  ")
 		if err != nil {
 			return err
 		}

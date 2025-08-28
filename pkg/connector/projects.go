@@ -26,6 +26,10 @@ func (o *projectBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return projectResourceType
 }
 
+func projectResource(p *client.Project, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	return sdkResource.NewResource(p.Name, projectResourceType, p.Id, sdkResource.WithParentResourceID(parentResourceID))
+}
+
 // List returns all the projects from the database as resource objects
 // Projects don't include any traits because they don't match the 'shape' of any well known types.
 func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
@@ -36,7 +40,7 @@ func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.Resource
 
 	var ret []*v2.Resource
 	for _, p := range projects {
-		project, err := sdkResource.NewResource(p.Name, projectResourceType, p.Id, sdkResource.WithParentResourceID(parentResourceID))
+		project, err := projectResource(p, parentResourceID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -44,6 +48,20 @@ func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.Resource
 	}
 
 	return ret, "", nil, nil
+}
+
+func (o *projectBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	project, err := o.client.GetProject(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resource, err := projectResource(project, parentResourceId)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return resource, nil, nil
 }
 
 // Entitlements returns two entitlements:
@@ -85,22 +103,14 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, pID))
-
-		// Look up group and iterate its members
-		grp, err := o.client.GetGroup(ctx, grpID)
-		if err != nil {
-			return nil, "", nil, err
+		entitlementIDs := []string{
+			fmt.Sprintf("group:%s:member", grpID),
+			fmt.Sprintf("group:%s:admin", grpID),
 		}
-
-		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdkResource.NewResourceID(userResourceType, userID)
-			if err != nil {
-				return nil, "", nil, err
-			}
-
-			ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, pID))
-		}
+		grant := sdkGrant.NewGrant(resource, projectAccessEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+			EntitlementIds: entitlementIDs,
+		}))
+		ret = append(ret, grant)
 	}
 
 	return ret, "", nil, nil

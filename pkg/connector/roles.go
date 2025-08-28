@@ -11,6 +11,8 @@ import (
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -25,6 +27,10 @@ func (o *roleBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return roleResourceType
 }
 
+func roleResource(r *client.Role, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	return sdkResource.NewRoleResource(r.Name, roleResourceType, r.Id, nil, sdkResource.WithParentResourceID(parentResourceID))
+}
+
 // List returns all the roles from the database as resource objects
 // Roles include the role trait because they have the 'shape' of the well known Role type.
 func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
@@ -35,7 +41,7 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 
 	var ret []*v2.Resource
 	for _, r := range roles {
-		role, err := sdkResource.NewRoleResource(r.Name, roleResourceType, r.Id, nil, sdkResource.WithParentResourceID(parentResourceID))
+		role, err := roleResource(r, parentResourceID)
 		if err != nil {
 			return nil, "", nil, err
 		}
@@ -43,6 +49,19 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 	}
 
 	return ret, "", nil, nil
+}
+
+func (o *roleBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
+	role, err := o.client.GetRole(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resource, err := roleResource(role, parentResourceId)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resource, nil, nil
 }
 
 // Entitlements returns an assignment entitlement.
@@ -81,23 +100,14 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
-
-		// Look up group and iterate its members
-		grp, err := o.client.GetGroup(ctx, grpID)
-		if err != nil {
-			return nil, "", nil, err
+		entitlementIDs := []string{
+			fmt.Sprintf("group:%s:member", grpID),
+			fmt.Sprintf("group:%s:admin", grpID),
 		}
-
-		// Grant all admins and members the assignment entitlement
-		for _, userID := range append(grp.Admins, grp.Members...) {
-			pID, err := sdkResource.NewResourceID(userResourceType, userID)
-			if err != nil {
-				return nil, "", nil, err
-			}
-
-			ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
-		}
+		grant := sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+			EntitlementIds: entitlementIDs,
+		}))
+		ret = append(ret, grant)
 	}
 
 	return ret, "", nil, nil
@@ -135,7 +145,7 @@ func (o *roleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.
 		}
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("baton-demo: unknown resource type")
+		return nil, status.Errorf(codes.InvalidArgument, "unknown resource type")
 	}
 }
 
