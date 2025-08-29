@@ -29,9 +29,9 @@ func userId(i int) string {
 
 func (g *generator) Next() (*dbResource, bool) {
 	db := &dbResource{}
-	if g.currentGroup == 0 {
+	if g.currentGroup == g.config.Groups {
 		// Make the Everyone group.
-		groupAdmins := []string{userId(g.config.Users)}
+		groupAdmins := []string{userId(0)}
 		groupMembers := []string{}
 		for i := 0; i < g.config.Users; i++ {
 			groupMembers = append(groupMembers, userId(i))
