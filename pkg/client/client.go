@@ -262,8 +262,8 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	q := c.db.From(users.Name()).Prepared(true)
 	q = q.Select("id", "name", "email").
 		Order(goqu.C("id").Asc()).
-		Limit(uint(limit)).
-		Offset(uint(offset))
+		Limit(uint(limit)).  //nolint:gosec // This won't underflow
+		Offset(uint(offset)) //nolint:gosec // This won't underflow
 
 	query, args, err := q.ToSQL()
 	if err != nil {
