@@ -106,9 +106,11 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 		return nil, "", nil, err
 	}
 
-	ret = append(ret, sdkGrant.NewGrant(resource, projectOwnerEntitlement, ownerID))
-	// Owners also receive the access entitlement
-	ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, ownerID))
+	if project.Owner != "" && offset == 0 {
+		ret = append(ret, sdkGrant.NewGrant(resource, projectOwnerEntitlement, ownerID))
+		// Owners also receive the access entitlement
+		ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, ownerID))
+	}
 
 	// Iterate group assignments
 	if len(project.GroupAssignments) > offset {

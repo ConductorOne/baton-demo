@@ -91,28 +91,44 @@ func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 
 // Grants returns grant information for group administrators and members.
 func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+	b := &pagination.Bag{}
+	err := b.Unmarshal(pToken.Token)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	if b.Current() == nil {
+		b.Push(pagination.PageState{
+			ResourceTypeID: "admins",
+			Token:          "0",
+		})
+		b.Push(pagination.PageState{
+			ResourceTypeID: "members",
+			Token:          "0",
+		})
+	}
+
 	grp, err := o.client.GetGroup(ctx, resource.Id.Resource)
 	if err != nil {
 		return nil, "", nil, err
 	}
 
-	offset := 0
-	limit := 1000
-	if pToken != nil {
-		if pToken.Token != "" {
-			offset, err = strconv.Atoi(pToken.Token)
-			if err != nil {
-				return nil, "", nil, err
-			}
-		}
-		if pToken.Size > 0 {
-			limit = pToken.Size
-		}
+	limit := pToken.Size
+	if limit == 0 {
+		limit = 1000
 	}
 
 	var ret []*v2.Grant
 
-	if len(grp.Admins) > offset {
+	ps := b.Current()
+
+	offset, err := strconv.Atoi(ps.Token)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	switch ps.ResourceTypeID {
+	case "admins":
 		end := min(offset+limit, len(grp.Admins))
 		for _, adminID := range grp.Admins[offset:end] {
 			pID, err := sdkResource.NewResourceID(userResourceType, adminID)
@@ -124,9 +140,18 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 			ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
 			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
 		}
-	}
 
-	if len(grp.Members) > offset {
+		nextPage := ""
+		if end < len(grp.Admins) {
+			nextPage = strconv.Itoa(end)
+		}
+
+		nextPageToken, err := b.NextToken(nextPage)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		return ret, nextPageToken, nil, nil
+	case "members":
 		end := min(offset+limit, len(grp.Members))
 		for _, memberID := range grp.Members[offset:end] {
 			pID, err := sdkResource.NewResourceID(userResourceType, memberID)
@@ -136,13 +161,19 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 
 			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
 		}
-	}
+		nextPage := ""
+		if end < len(grp.Members) {
+			nextPage = strconv.Itoa(end)
+		}
 
-	nextPageToken := ""
-	if len(grp.Admins) > offset+limit || len(grp.Members) > offset+limit {
-		nextPageToken = strconv.Itoa(offset + limit)
+		nextPageToken, err := b.NextToken(nextPage)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		return ret, nextPageToken, nil, nil
+	default:
+		return nil, "", nil, fmt.Errorf("unknown resource type")
 	}
-	return ret, nextPageToken, nil, nil
 }
 
 func parseGroupID(groupID string) (string, string, error) {
