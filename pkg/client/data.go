@@ -107,7 +107,7 @@ func (g *generator) Next() (*dbResource, bool) {
 		db.Password = &Password{
 			Id:       fmt.Sprintf("password-%07d", g.currentPassword),
 			Password: "password",
-			UserId:   userId(g.currentUser),
+			UserId:   userId(g.currentPassword),
 		}
 		g.currentPassword++
 		return db, true
