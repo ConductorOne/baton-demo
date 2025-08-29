@@ -14,6 +14,22 @@ type dbResource struct {
 	Password *Password
 }
 
+func (r *dbResource) String() string {
+	switch {
+	case r.User != nil:
+		return fmt.Sprintf("User: id %s name '%s' email '%s'", r.User.Id, r.User.Name, r.User.Email)
+	case r.Group != nil:
+		return fmt.Sprintf("Group: id %s name '%s' %d admins %d members", r.Group.Id, r.Group.Name, len(r.Group.Admins), len(r.Group.Members))
+	case r.Role != nil:
+		return fmt.Sprintf("Role: id %s name '%s' %d users %d groups", r.Role.Id, r.Role.Name, len(r.Role.DirectAssignments), len(r.Role.GroupAssignments))
+	case r.Project != nil:
+		return fmt.Sprintf("Project: id %s name '%s' owner %s %d groups", r.Project.Id, r.Project.Name, r.Project.Owner, len(r.Project.GroupAssignments))
+	case r.Password != nil:
+		return fmt.Sprintf("Password: id %s userid %s", r.Password.Id, r.Password.UserId)
+	}
+	return "Unknown"
+}
+
 type generator struct {
 	config          *config.Demo
 	currentUser     int

@@ -9,11 +9,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/conductorone/baton-demo/pkg/config"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/doug-martin/goqu/v9"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/segmentio/ksuid"
+	"go.uber.org/zap"
 
 	// NOTE: required to register the dialect for goqu.
 	//
@@ -132,14 +135,23 @@ func (c *Client) initDB(ctx context.Context) error {
 		return err
 	}
 
+	l := ctxzap.Extract(ctx)
+	l.Info("Initializing database", zap.Any("config", c.config))
+
 	generator := &generator{
 		config: c.config,
 	}
 
+	lastLogTime := time.Now()
 	for {
 		dbResource, ok := generator.Next()
 		if !ok {
 			break
+		}
+
+		if time.Since(lastLogTime) > 10*time.Second {
+			l.Info("Inserting resource", zap.Any("resource", dbResource))
+			lastLogTime = time.Now()
 		}
 
 		switch {
@@ -233,6 +245,8 @@ func (c *Client) initDB(ctx context.Context) error {
 			}
 		}
 	}
+
+	l.Info("Database initialized")
 
 	return nil
 }
