@@ -60,6 +60,6 @@ jobs:
         uses: ConductorOne/github-workflows/actions/sync-test@v2
         with:
           connector: ./baton-demo
-          baton-entitlement: 'group:2IC0WjepYDBsRp6b7cqrumGsVGt:member'
-          baton-principal: '2IC0Wn7DaxV1xqDpdg7jJRiPtCp'
+          baton-entitlement: 'group:group-0000000:member'
+          baton-principal: 'user-0000000'
           baton-principal-type: 'user'
