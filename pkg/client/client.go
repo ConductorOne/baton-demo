@@ -5,9 +5,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/conductorone/baton-demo/pkg/config"
+	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/doug-martin/goqu/v9"
 	"github.com/segmentio/ksuid"
 
@@ -52,36 +56,59 @@ type Project struct {
 	GroupAssignments []string
 }
 
+type Password struct {
+	Id       string
+	Password string
+	UserId   string
+}
+
 // Client is a simple example client. While this client would normally be responsible for communicating with an upstream.
 // API, for this demo the client is only working with in-memory data.
 type Client struct {
-	db         *goqu.Database
-	rawDB      *sql.DB
-	dbFileName string
+	db     *goqu.Database
+	rawDB  *sql.DB
+	config *config.Demo
 }
 
-func NewClient(dbFileName string, initDB bool) (*Client, error) {
-	c := &Client{}
-
-	// Open the database file
-	if dbFileName == "" {
-		dbFileName = "baton-demo.db"
+func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
+	c := &Client{
+		config: dc,
 	}
 
-	rawDB, err := sql.Open("sqlite", dbFileName)
+	// Open the database file
+	if c.config.DbFileName == "" {
+		c.config.DbFileName = "baton-demo.db"
+	}
+
+	if _, err := os.Stat(c.config.DbFileName); os.IsNotExist(err) {
+		c.config.InitDb = true
+	}
+
+	rawDB, err := sql.Open("sqlite", c.config.DbFileName)
 	if err != nil {
 		return nil, err
 	}
 
 	db := goqu.New("sqlite3", rawDB)
-	c.dbFileName = dbFileName
 	c.db = db
 	c.rawDB = rawDB
 
-	err = c.initDB(initDB)
-	if err != nil {
-		log.Fatal(err)
-		return nil, err
+	// ensure all schemas exist
+	for _, t := range allTableDescriptors {
+		query, args := t.Schema()
+
+		_, err := c.db.Exec(query, args...)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if c.config.InitDb {
+		err = c.initDB(ctx)
+		if err != nil {
+			log.Fatal(err)
+			return nil, err
+		}
 	}
 
 	return c, nil
@@ -99,122 +126,111 @@ func (c *Client) validateDB() error {
 	return nil
 }
 
-func (c *Client) initDB(initDB bool) error {
+func (c *Client) initDB(ctx context.Context) error {
 	err := c.validateDB()
 	if err != nil {
 		return err
 	}
 
-	// ensure all schemas exist
-	for _, t := range allTableDescriptors {
-		query, args := t.Schema()
-
-		_, err := c.db.Exec(query, args...)
-		if err != nil {
-			return err
-		}
+	generator := &generator{
+		config: c.config,
 	}
 
-	if initDB {
-		seedData := generateDB()
-		err = c.db.WithTx(func(tx *goqu.TxDatabase) error {
-			baseUserQ := tx.Insert(users.Name()).Prepared(true)
-			baseUserQ = baseUserQ.OnConflict(goqu.DoNothing())
-			for _, user := range seedData.Users {
-				query, args, err := baseUserQ.Rows(goqu.Record{
-					"id":    user.Id,
-					"name":  user.Name,
-					"email": user.Email,
-				}).ToSQL()
-				if err != nil {
-					return err
-				}
+	for {
+		dbResource, ok := generator.Next()
+		if !ok {
+			break
+		}
 
-				_, err = tx.Exec(query, args...)
-				if err != nil {
-					return err
-				}
+		switch {
+		case dbResource.User != nil:
+			row := goqu.Record{
+				"id":    dbResource.User.Id,
+				"name":  dbResource.User.Name,
+				"email": dbResource.User.Email,
 			}
-
-			baseGroupQ := tx.Insert(groups.Name()).Prepared(true)
-			baseGroupQ = baseGroupQ.OnConflict(goqu.DoNothing())
-			for _, group := range seedData.Groups {
-				query, args, err := baseGroupQ.Rows(goqu.Record{
-					"id":      group.Id,
-					"name":    group.Name,
-					"admins":  strings.Join(group.Admins, ","),
-					"members": strings.Join(group.Members, ","),
-				}).ToSQL()
-				if err != nil {
-					return err
-				}
-
-				_, err = tx.Exec(query, args...)
-				if err != nil {
-					return err
-				}
+			baseUserQ := c.db.Insert(users.Name()).Prepared(true)
+			baseUserQ = baseUserQ.Rows(row)
+			baseUserQ = baseUserQ.OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := baseUserQ.ToSQL()
+			if err != nil {
+				return err
 			}
-
-			baseRoleQ := tx.Insert(roles.Name()).Prepared(true)
-			baseRoleQ = baseRoleQ.OnConflict(goqu.DoNothing())
-			for _, role := range seedData.Roles {
-				query, args, err := baseRoleQ.Rows(goqu.Record{
-					"id":                 role.Id,
-					"name":               role.Name,
-					"direct_assignments": strings.Join(role.DirectAssignments, ","),
-					"group_assignments":  strings.Join(role.GroupAssignments, ","),
-				}).ToSQL()
-				if err != nil {
-					return err
-				}
-
-				_, err = tx.Exec(query, args...)
-				if err != nil {
-					return err
-				}
+			_, err = c.db.Exec(query, args...)
+			if err != nil {
+				return err
 			}
-
-			baseProjectQ := tx.Insert(projects.Name()).Prepared(true)
-			baseProjectQ = baseProjectQ.OnConflict(goqu.DoNothing())
-			for _, project := range seedData.Projects {
-				query, args, err := baseProjectQ.Rows(goqu.Record{
-					"id":                project.Id,
-					"name":              project.Name,
-					"owner":             project.Owner,
-					"group_assignments": strings.Join(project.GroupAssignments, ","),
-				}).ToSQL()
-				if err != nil {
-					return err
-				}
-
-				_, err = tx.Exec(query, args...)
-				if err != nil {
-					return err
-				}
+		case dbResource.Group != nil:
+			row := goqu.Record{
+				"id":      dbResource.Group.Id,
+				"name":    dbResource.Group.Name,
+				"admins":  strings.Join(dbResource.Group.Admins, ","),
+				"members": strings.Join(dbResource.Group.Members, ","),
 			}
-
-			basePasswordQ := tx.Insert(passwords.Name()).Prepared(true)
-			basePasswordQ = basePasswordQ.OnConflict(goqu.DoNothing())
-			for userID, password := range seedData.Passwords {
-				query, args, err := basePasswordQ.Rows(goqu.Record{
-					"id":       ksuid.New().String(),
-					"user_id":  userID,
-					"password": password,
-				}).ToSQL()
-				if err != nil {
-					return err
-				}
-
-				_, err = tx.Exec(query, args...)
-				if err != nil {
-					return err
-				}
+			baseGroupQ := c.db.Insert(groups.Name()).Prepared(true)
+			baseGroupQ = baseGroupQ.Rows(row)
+			baseGroupQ = baseGroupQ.OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := baseGroupQ.ToSQL()
+			if err != nil {
+				return err
 			}
-
-			return nil
-		})
-		if err != nil {
-			return err
+			_, err = c.db.Exec(query, args...)
+			if err != nil {
+				return err
+			}
+		case dbResource.Role != nil:
+			row := goqu.Record{
+				"id":                 dbResource.Role.Id,
+				"name":               dbResource.Role.Name,
+				"direct_assignments": strings.Join(dbResource.Role.DirectAssignments, ","),
+				"group_assignments":  strings.Join(dbResource.Role.GroupAssignments, ","),
+			}
+			baseRoleQ := c.db.Insert(roles.Name()).Prepared(true)
+			baseRoleQ = baseRoleQ.Rows(row)
+			baseRoleQ = baseRoleQ.OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := baseRoleQ.ToSQL()
+			if err != nil {
+				return err
+			}
+			_, err = c.db.Exec(query, args...)
+			if err != nil {
+				return err
+			}
+		case dbResource.Project != nil:
+			row := goqu.Record{
+				"id":                dbResource.Project.Id,
+				"name":              dbResource.Project.Name,
+				"owner":             dbResource.Project.Owner,
+				"group_assignments": strings.Join(dbResource.Project.GroupAssignments, ","),
+			}
+			baseProjectQ := c.db.Insert(projects.Name()).Prepared(true)
+			baseProjectQ = baseProjectQ.Rows(row)
+			baseProjectQ = baseProjectQ.OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := baseProjectQ.ToSQL()
+			if err != nil {
+				return err
+			}
+			_, err = c.db.Exec(query, args...)
+			if err != nil {
+				return err
+			}
+		case dbResource.Password != nil:
+			row := goqu.Record{
+				"id":       dbResource.Password.Id,
+				"user_id":  dbResource.Password.UserId,
+				"password": dbResource.Password.Password,
+			}
+			basePasswordQ := c.db.Insert(passwords.Name()).Prepared(true)
+			basePasswordQ = basePasswordQ.Rows(row)
+			basePasswordQ = basePasswordQ.OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := basePasswordQ.ToSQL()
+			if err != nil {
+				return err
+			}
+			_, err = c.db.Exec(query, args...)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -222,23 +238,41 @@ func (c *Client) initDB(initDB bool) error {
 }
 
 // ListUsers returns all the users from the database.
-func (c *Client) ListUsers(ctx context.Context) ([]*User, error) {
+func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*User, string, error) {
 	err := c.validateDB()
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+
+	limit := 500
+	offset := 0
+	if pToken != nil {
+		limit = pToken.Size
+		if limit <= 0 {
+			limit = 500
+		}
+		if pToken.Token != "" {
+			offset, err = strconv.Atoi(pToken.Token)
+			if err != nil {
+				return nil, "", err
+			}
+		}
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email")
+	q = q.Select("id", "name", "email").
+		Order(goqu.C("id").Asc()).
+		Limit(uint(limit)).
+		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	usersList := []*User{}
@@ -246,12 +280,17 @@ func (c *Client) ListUsers(ctx context.Context) ([]*User, error) {
 		user := &User{}
 		err = rows.Scan(&user.Id, &user.Name, &user.Email)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		usersList = append(usersList, user)
 	}
 
-	return usersList, nil
+	nextPageToken := ""
+	if len(usersList) == limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+
+	return usersList, nextPageToken, nil
 }
 
 // GetUser returns the user requested if it exists, else returns an error.

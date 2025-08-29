@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/conductorone/baton-demo/pkg/client"
@@ -95,29 +96,53 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 		return nil, "", nil, err
 	}
 
+	offset := 0
+	limit := 1000
+	if pToken != nil {
+		if pToken.Token != "" {
+			offset, err = strconv.Atoi(pToken.Token)
+			if err != nil {
+				return nil, "", nil, err
+			}
+		}
+		if pToken.Size > 0 {
+			limit = pToken.Size
+		}
+	}
+
 	var ret []*v2.Grant
 
-	for _, adminID := range grp.Admins {
-		pID, err := sdkResource.NewResourceID(userResourceType, adminID)
-		if err != nil {
-			return nil, "", nil, err
-		}
+	if len(grp.Admins) > offset {
+		end := min(offset+limit, len(grp.Admins))
+		for _, adminID := range grp.Admins[offset:end] {
+			pID, err := sdkResource.NewResourceID(userResourceType, adminID)
+			if err != nil {
+				return nil, "", nil, err
+			}
 
-		// Each admin gets the admin entitlement in addition to the member entitlement
-		ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
-		ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+			// Each admin gets the admin entitlement in addition to the member entitlement
+			ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+		}
 	}
 
-	for _, memberID := range grp.Members {
-		pID, err := sdkResource.NewResourceID(userResourceType, memberID)
-		if err != nil {
-			return nil, "", nil, err
-		}
+	if len(grp.Members) > offset {
+		end := min(offset+limit, len(grp.Members))
+		for _, memberID := range grp.Members[offset:end] {
+			pID, err := sdkResource.NewResourceID(userResourceType, memberID)
+			if err != nil {
+				return nil, "", nil, err
+			}
 
-		ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+		}
 	}
 
-	return ret, "", nil, nil
+	nextPageToken := ""
+	if len(grp.Admins) > offset+limit || len(grp.Members) > offset+limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+	return ret, nextPageToken, nil, nil
 }
 
 func parseGroupID(groupID string) (string, string, error) {

@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/conductorone/baton-demo/pkg/client"
+	"github.com/conductorone/baton-demo/pkg/config"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
@@ -44,13 +45,9 @@ func (d *Demo) Validate(ctx context.Context) (annotations.Annotations, error) {
 	return nil, nil
 }
 
-func (d *Demo) Close() error {
-	return d.client.Close()
-}
-
 // New returns a new instance of the Demo connector.
-func New(ctx context.Context, dbFileName string, initDB bool) (*Demo, error) {
-	cli, err := client.NewClient(dbFileName, initDB)
+func New(ctx context.Context, dc *config.Demo) (*Demo, error) {
+	cli, err := client.NewClient(ctx, dc)
 	if err != nil {
 		return nil, err
 	}
