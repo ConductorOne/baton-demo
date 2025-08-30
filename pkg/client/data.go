@@ -63,15 +63,17 @@ func (g *generator) Next() (*dbResource, bool) {
 		return db, true
 	}
 	if g.currentGroup < g.config.Groups {
-		// Split the users evenly into all groups.
 		groupAdmins := []string{}
 		groupMembers := []string{}
+		usersPerGroup := (g.config.Users / g.config.Groups) / 3
+		if usersPerGroup == 0 {
+			usersPerGroup = 1
+		}
 		for i := 0; i < g.config.Users; i++ {
-			if i%g.config.Groups == g.currentGroup {
+			if i%usersPerGroup == 0 {
+				groupMembers = append(groupMembers, userId(i))
 				if i%2 == 0 {
 					groupAdmins = append(groupAdmins, userId(i))
-				} else {
-					groupMembers = append(groupMembers, userId(i))
 				}
 			}
 		}
