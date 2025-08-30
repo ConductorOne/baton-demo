@@ -29,7 +29,15 @@ func (o *roleBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 func roleResource(r *client.Role, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
-	return sdkResource.NewRoleResource(r.Name, roleResourceType, r.Id, nil, sdkResource.WithParentResourceID(parentResourceID))
+	traits := []sdkResource.RoleTraitOption{
+		sdkResource.WithRoleProfile(map[string]any{
+			"role_color":         "blue",
+			"total_assignments":  len(r.DirectAssignments) + len(r.GroupAssignments),
+			"direct_assignments": len(r.DirectAssignments),
+			"group_assignments":  len(r.GroupAssignments),
+		}),
+	}
+	return sdkResource.NewRoleResource(r.Name, roleResourceType, r.Id, traits, sdkResource.WithParentResourceID(parentResourceID))
 }
 
 // List returns all the roles from the database as resource objects
