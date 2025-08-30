@@ -30,6 +30,10 @@ func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource
 		sdkResource.WithDetailedStatus(v2.UserTrait_Status_STATUS_ENABLED, "Enabled"),
 		sdkResource.WithEmployeeID(u.Id),
 		sdkResource.WithAccountType(v2.UserTrait_ACCOUNT_TYPE_HUMAN),
+		sdkResource.WithUserProfile(map[string]any{
+			"full_name": u.Name,
+			"email":     u.Email,
+		}),
 	}
 	return sdkResource.NewUserResource(
 		u.Name,
