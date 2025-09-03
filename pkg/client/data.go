@@ -44,7 +44,6 @@ func userId(i int) string {
 }
 
 func (g *generator) Next() (*dbResource, bool) {
-	db := &dbResource{}
 	if g.currentGroup == g.config.Groups {
 		// Make the Everyone group.
 		groupAdmins := []string{userId(0)}
@@ -53,11 +52,13 @@ func (g *generator) Next() (*dbResource, bool) {
 			groupMembers = append(groupMembers, userId(i))
 		}
 
-		db.Group = &Group{
-			Id:      "group-everyone",
-			Name:    "Everyone",
-			Admins:  groupAdmins,
-			Members: groupMembers,
+		db := &dbResource{
+			Group: &Group{
+				Id:      "group-everyone",
+				Name:    "Everyone",
+				Admins:  groupAdmins,
+				Members: groupMembers,
+			},
 		}
 		g.currentGroup++
 		return db, true
@@ -65,67 +66,77 @@ func (g *generator) Next() (*dbResource, bool) {
 	if g.currentGroup < g.config.Groups {
 		groupAdmins := []string{}
 		groupMembers := []string{}
-		usersPerGroup := (g.config.Users / g.config.Groups) / 3
-		if usersPerGroup == 0 {
-			usersPerGroup = 1
-		}
+		usersPerGroup := 20 // Add 5% of users to each group
 		for i := 0; i < g.config.Users; i++ {
 			if i%usersPerGroup == 0 {
 				groupMembers = append(groupMembers, userId(i))
-				if i%2 == 0 {
+				if i%(usersPerGroup*10) == 0 {
 					groupAdmins = append(groupAdmins, userId(i))
 				}
 			}
 		}
-		db.Group = &Group{
-			Id:      fmt.Sprintf("group-%07d", g.currentGroup),
-			Name:    fmt.Sprintf("Group %07d", g.currentGroup),
-			Admins:  groupAdmins,
-			Members: groupMembers,
+		db := &dbResource{
+			Group: &Group{
+				Id:      fmt.Sprintf("group-%07d", g.currentGroup),
+				Name:    fmt.Sprintf("Group %07d", g.currentGroup),
+				Admins:  groupAdmins,
+				Members: groupMembers,
+			},
 		}
 		g.currentGroup++
 		return db, true
 	}
 	if g.currentProject < g.config.Projects {
-		db.Project = &Project{
-			Id:    fmt.Sprintf("project-%07d", g.currentProject),
-			Name:  fmt.Sprintf("Project %07d", g.currentProject),
-			Owner: userId(g.currentProject % g.config.Users),
-			GroupAssignments: []string{
-				fmt.Sprintf("group-%07d", g.currentProject%g.config.Groups),
+		db := &dbResource{
+			Project: &Project{
+				Id:    fmt.Sprintf("project-%07d", g.currentProject),
+				Name:  fmt.Sprintf("Project %07d", g.currentProject),
+				Owner: userId(g.currentProject % g.config.Users),
+				GroupAssignments: []string{
+					fmt.Sprintf("group-%07d", g.currentProject%g.config.Groups),
+					fmt.Sprintf("group-%07d", (g.currentProject*10)%g.config.Groups),
+				},
 			},
 		}
 		g.currentProject++
 		return db, true
 	}
 	if g.currentRole < g.config.Roles {
-		db.Role = &Role{
-			Id:   fmt.Sprintf("role-%07d", g.currentRole),
-			Name: fmt.Sprintf("Role %07d", g.currentRole),
-			DirectAssignments: []string{
-				userId(g.currentRole % g.config.Users),
-			},
-			GroupAssignments: []string{
-				fmt.Sprintf("group-%07d", g.currentRole%g.config.Groups),
+		db := &dbResource{
+			Role: &Role{
+				Id:   fmt.Sprintf("role-%07d", g.currentRole),
+				Name: fmt.Sprintf("Role %07d", g.currentRole),
+				DirectAssignments: []string{
+					userId(g.currentRole % g.config.Users),
+					userId((g.currentRole * 10) % g.config.Users),
+				},
+				GroupAssignments: []string{
+					fmt.Sprintf("group-%07d", g.currentRole%g.config.Groups),
+					fmt.Sprintf("group-%07d", (g.currentRole*10)%g.config.Groups),
+				},
 			},
 		}
 		g.currentRole++
 		return db, true
 	}
 	if g.currentUser < g.config.Users {
-		db.User = &User{
-			Id:    userId(g.currentUser),
-			Name:  fmt.Sprintf("User %07d", g.currentUser),
-			Email: fmt.Sprintf("user-%d@example.com", g.currentUser),
+		db := &dbResource{
+			User: &User{
+				Id:    userId(g.currentUser),
+				Name:  fmt.Sprintf("User %07d", g.currentUser),
+				Email: fmt.Sprintf("user-%d@example.com", g.currentUser),
+			},
 		}
 		g.currentUser++
 		return db, true
 	}
 	if g.currentPassword < g.config.Users {
-		db.Password = &Password{
-			Id:       fmt.Sprintf("password-%07d", g.currentPassword),
-			Password: "password",
-			UserId:   userId(g.currentPassword),
+		db := &dbResource{
+			Password: &Password{
+				Id:       fmt.Sprintf("password-%07d", g.currentPassword),
+				Password: "password",
+				UserId:   userId(g.currentPassword),
+			},
 		}
 		g.currentPassword++
 		return db, true
