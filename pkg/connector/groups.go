@@ -232,6 +232,11 @@ func (o *groupBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations
 		if err != nil {
 			return nil, err
 		}
+		// Revoke admin entitlement if the user is an admin.
+		err = o.client.RevokeGroupAdmin(ctx, group, principalId.Resource)
+		if err != nil {
+			return nil, err
+		}
 		return nil, nil
 	case groupAdminEntitlement:
 		err := o.client.RevokeGroupAdmin(ctx, group, principalId.Resource)
