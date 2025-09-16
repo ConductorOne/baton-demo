@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/conductorone/baton-demo/pkg/client"
@@ -90,34 +91,89 @@ func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 
 // Grants returns grant information for group administrators and members.
 func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+	b := &pagination.Bag{}
+	err := b.Unmarshal(pToken.Token)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	if b.Current() == nil {
+		b.Push(pagination.PageState{
+			ResourceTypeID: "admins",
+			Token:          "0",
+		})
+		b.Push(pagination.PageState{
+			ResourceTypeID: "members",
+			Token:          "0",
+		})
+	}
+
 	grp, err := o.client.GetGroup(ctx, resource.Id.Resource)
 	if err != nil {
 		return nil, "", nil, err
 	}
 
+	limit := pToken.Size
+	if limit == 0 {
+		limit = 1000
+	}
+
 	var ret []*v2.Grant
 
-	for _, adminID := range grp.Admins {
-		pID, err := sdkResource.NewResourceID(userResourceType, adminID)
+	ps := b.Current()
+
+	offset, err := strconv.Atoi(ps.Token)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	switch ps.ResourceTypeID {
+	case "admins":
+		end := min(offset+limit, len(grp.Admins))
+		for _, adminID := range grp.Admins[offset:end] {
+			pID, err := sdkResource.NewResourceID(userResourceType, adminID)
+			if err != nil {
+				return nil, "", nil, err
+			}
+
+			// Each admin gets the admin entitlement in addition to the member entitlement
+			ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+		}
+
+		nextPage := ""
+		if end < len(grp.Admins) {
+			nextPage = strconv.Itoa(end)
+		}
+
+		nextPageToken, err := b.NextToken(nextPage)
 		if err != nil {
 			return nil, "", nil, err
 		}
+		return ret, nextPageToken, nil, nil
+	case "members":
+		end := min(offset+limit, len(grp.Members))
+		for _, memberID := range grp.Members[offset:end] {
+			pID, err := sdkResource.NewResourceID(userResourceType, memberID)
+			if err != nil {
+				return nil, "", nil, err
+			}
 
-		// Each admin gets the admin entitlement in addition to the member entitlement
-		ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
-		ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
-	}
+			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+		}
+		nextPage := ""
+		if end < len(grp.Members) {
+			nextPage = strconv.Itoa(end)
+		}
 
-	for _, memberID := range grp.Members {
-		pID, err := sdkResource.NewResourceID(userResourceType, memberID)
+		nextPageToken, err := b.NextToken(nextPage)
 		if err != nil {
 			return nil, "", nil, err
 		}
-
-		ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+		return ret, nextPageToken, nil, nil
+	default:
+		return nil, "", nil, fmt.Errorf("unknown resource type")
 	}
-
-	return ret, "", nil, nil
 }
 
 func parseGroupID(groupID string) (string, string, error) {
@@ -173,6 +229,11 @@ func (o *groupBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations
 	switch grant.Entitlement.Slug {
 	case groupMemberEntitlement:
 		err := o.client.RevokeGroupMember(ctx, group, principalId.Resource)
+		if err != nil {
+			return nil, err
+		}
+		// Revoke admin entitlement if the user is an admin.
+		err = o.client.RevokeGroupAdmin(ctx, group, principalId.Resource)
 		if err != nil {
 			return nil, err
 		}

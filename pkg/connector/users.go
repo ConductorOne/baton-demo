@@ -24,13 +24,22 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	traits := []sdkResource.UserTraitOption{
+		sdkResource.WithEmail(u.Email, true),
+		sdkResource.WithUserLogin(u.Id),
+		sdkResource.WithDetailedStatus(v2.UserTrait_Status_STATUS_ENABLED, "Enabled"),
+		sdkResource.WithEmployeeID(u.Id),
+		sdkResource.WithAccountType(v2.UserTrait_ACCOUNT_TYPE_HUMAN),
+		sdkResource.WithUserProfile(map[string]any{
+			"full_name": u.Name,
+			"email":     u.Email,
+		}),
+	}
 	return sdkResource.NewUserResource(
 		u.Name,
 		userResourceType,
 		u.Id,
-		[]sdkResource.UserTraitOption{
-			sdkResource.WithEmail(u.Email, true),
-		},
+		traits,
 		sdkResource.WithParentResourceID(parentResourceID),
 	)
 }
@@ -38,7 +47,7 @@ func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
 func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	users, err := o.client.ListUsers(ctx)
+	users, nextPageToken, err := o.client.ListUsers(ctx, pToken)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -53,7 +62,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 		ret = append(ret, userResource)
 	}
 
-	return ret, "", nil, nil
+	return ret, nextPageToken, nil, nil
 }
 
 func (o *userBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {

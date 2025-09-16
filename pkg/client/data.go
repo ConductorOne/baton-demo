@@ -1,119 +1,148 @@
 package client
 
-type database struct {
-	Users     []*User
-	Groups    []*Group
-	Roles     []*Role
-	Projects  []*Project
-	Passwords map[string]string
+import (
+	"fmt"
+
+	"github.com/conductorone/baton-demo/pkg/config"
+)
+
+type dbResource struct {
+	User     *User
+	Group    *Group
+	Role     *Role
+	Project  *Project
+	Password *Password
 }
 
-func generateDB() *database {
-	db := &database{}
+func (r *dbResource) String() string {
+	switch {
+	case r.User != nil:
+		return fmt.Sprintf("User: id %s name '%s' email '%s'", r.User.Id, r.User.Name, r.User.Email)
+	case r.Group != nil:
+		return fmt.Sprintf("Group: id %s name '%s' %d admins %d members", r.Group.Id, r.Group.Name, len(r.Group.Admins), len(r.Group.Members))
+	case r.Role != nil:
+		return fmt.Sprintf("Role: id %s name '%s' %d users %d groups", r.Role.Id, r.Role.Name, len(r.Role.DirectAssignments), len(r.Role.GroupAssignments))
+	case r.Project != nil:
+		return fmt.Sprintf("Project: id %s name '%s' owner %s %d groups", r.Project.Id, r.Project.Name, r.Project.Owner, len(r.Project.GroupAssignments))
+	case r.Password != nil:
+		return fmt.Sprintf("Password: id %s userid %s", r.Password.Id, r.Password.UserId)
+	}
+	return "Unknown"
+}
 
-	db.Users = []*User{
-		{
-			Id:    "2IC0Wn5oRQqVVn3COFl1O1zSzV6",
-			Name:  "Alice",
-			Email: "alice@example.com",
-		},
-		{
-			Id:    "2IC0WoNfqUPT7mgO4FOaViIxBrR",
-			Name:  "Bob",
-			Email: "bob@example.com",
-		},
-		{
-			Id:    "2IC0Wo34fcTerFEgWmyffXmfrW8",
-			Name:  "Carol",
-			Email: "carol@example.com",
-		},
-		{
-			Id:    "2IC0Wn7DaxV1xqDpdg7jJRiPtCp",
-			Name:  "Dan",
-			Email: "dan@example.com",
-		},
-		{
-			Id:    "2IC0WoaHVvl2GIQppXQH0flK1yJ",
-			Name:  "Frank",
-			Email: "frank@example.com",
-		},
+type generator struct {
+	config          *config.Demo
+	currentUser     int
+	currentPassword int
+	currentGroup    int
+	currentRole     int
+	currentProject  int
+}
+
+func userId(i int) string {
+	return fmt.Sprintf("user-%07d", i)
+}
+
+func (g *generator) Next() (*dbResource, bool) {
+	if g.currentGroup == g.config.Groups {
+		// Make the Everyone group.
+		groupAdmins := []string{userId(0)}
+		groupMembers := []string{}
+		for i := 0; i < g.config.Users; i++ {
+			groupMembers = append(groupMembers, userId(i))
+		}
+
+		db := &dbResource{
+			Group: &Group{
+				Id:      "group-everyone",
+				Name:    "Everyone",
+				Admins:  groupAdmins,
+				Members: groupMembers,
+			},
+		}
+		g.currentGroup++
+		return db, true
+	}
+	if g.currentGroup < g.config.Groups {
+		groupAdmins := []string{}
+		groupMembers := []string{}
+		usersPerGroup := 20 // Add 5% of users to each group
+		for i := 0; i < g.config.Users; i++ {
+			if i%usersPerGroup == 0 {
+				groupMembers = append(groupMembers, userId(i))
+				if i%(usersPerGroup*10) == 0 {
+					groupAdmins = append(groupAdmins, userId(i))
+				}
+			}
+		}
+		db := &dbResource{
+			Group: &Group{
+				Id:      fmt.Sprintf("group-%07d", g.currentGroup),
+				Name:    fmt.Sprintf("Group %07d", g.currentGroup),
+				Admins:  groupAdmins,
+				Members: groupMembers,
+			},
+		}
+		g.currentGroup++
+		return db, true
+	}
+	if g.currentProject < g.config.Projects {
+		db := &dbResource{
+			Project: &Project{
+				Id:    fmt.Sprintf("project-%07d", g.currentProject),
+				Name:  fmt.Sprintf("Project %07d", g.currentProject),
+				Owner: userId(g.currentProject % g.config.Users),
+				GroupAssignments: []string{
+					fmt.Sprintf("group-%07d", g.currentProject%g.config.Groups),
+					fmt.Sprintf("group-%07d", (g.currentProject*10)%g.config.Groups),
+				},
+			},
+		}
+		g.currentProject++
+		return db, true
+	}
+	if g.currentRole < g.config.Roles {
+		db := &dbResource{
+			Role: &Role{
+				Id:   fmt.Sprintf("role-%07d", g.currentRole),
+				Name: fmt.Sprintf("Role %07d", g.currentRole),
+				DirectAssignments: []string{
+					userId(g.currentRole % g.config.Users),
+					userId((g.currentRole * 10) % g.config.Users),
+				},
+				GroupAssignments: []string{
+					fmt.Sprintf("group-%07d", g.currentRole%g.config.Groups),
+					fmt.Sprintf("group-%07d", (g.currentRole*10)%g.config.Groups),
+				},
+			},
+		}
+		g.currentRole++
+		return db, true
+	}
+	if g.currentUser < g.config.Users {
+		db := &dbResource{
+			User: &User{
+				Id:    userId(g.currentUser),
+				Name:  fmt.Sprintf("User %07d", g.currentUser),
+				Email: fmt.Sprintf("user-%d@example.com", g.currentUser),
+			},
+		}
+		g.currentUser++
+		return db, true
+	}
+	if g.currentPassword < g.config.Users {
+		db := &dbResource{
+			Password: &Password{
+				Id:       fmt.Sprintf("password-%07d", g.currentPassword),
+				Password: "password",
+				UserId:   userId(g.currentPassword),
+			},
+		}
+		g.currentPassword++
+		return db, true
 	}
 
-	db.Passwords = map[string]string{
-		"2IC0Wn5oRQqVVn3COFl1O1zSzV6": "password",
-		"2IC0WoNfqUPT7mgO4FOaViIxBrR": "password",
-		"2IC0Wo34fcTerFEgWmyffXmfrW8": "password",
-		"2IC0Wn7DaxV1xqDpdg7jJRiPtCp": "password",
-		"2IC0WoaHVvl2GIQppXQH0flK1yJ": "password",
-	}
-
-	db.Groups = []*Group{
-		{
-			Id:   "2IC0WmAPkihbFdZhEPsch5N5WNO",
-			Name: "Engineers",
-			Admins: []string{
-				"2IC0Wo34fcTerFEgWmyffXmfrW8", // Carol
-			},
-			Members: []string{
-				"2IC0Wn5oRQqVVn3COFl1O1zSzV6", // Alice
-				"2IC0WoNfqUPT7mgO4FOaViIxBrR", // Bob
-			},
-		},
-		{
-			Id:   "2IC0WjepYDBsRp6b7cqrumGsVGt",
-			Name: "Sales",
-			Admins: []string{
-				"2IC0WoaHVvl2GIQppXQH0flK1yJ", // Frank
-			},
-			Members: []string{
-				"2IC0Wn7DaxV1xqDpdg7jJRiPtCp", // Dan
-			},
-		},
-	}
-
-	db.Roles = []*Role{
-		{
-			Id:   "2IC0WmaHecJdzo5jYnQiTh2BVlB",
-			Name: "Editor",
-			DirectAssignments: []string{
-				"2IC0WoaHVvl2GIQppXQH0flK1yJ", // Frank
-			},
-			GroupAssignments: []string{
-				"2IC0WmAPkihbFdZhEPsch5N5WNO", // Engineers
-			},
-		},
-		{
-			Id:                "2IC0WkRTFmsXH4P9TjiQnd29XMT",
-			Name:              "Reader",
-			DirectAssignments: []string{}, // No direct assignments
-			GroupAssignments: []string{
-				"2IC0WmAPkihbFdZhEPsch5N5WNO", // Engineers
-				"2IC0WjepYDBsRp6b7cqrumGsVGt", // Sales
-			},
-		},
-	}
-
-	db.Projects = []*Project{
-		{
-			Id:    "2IC0WqENS0dCRHiJ0YvPAidl0D5",
-			Name:  "Product X",
-			Owner: "2IC0WoNfqUPT7mgO4FOaViIxBrR", // Bob
-			GroupAssignments: []string{
-				"2IC0WmAPkihbFdZhEPsch5N5WNO", // Engineers
-				"2IC0WjepYDBsRp6b7cqrumGsVGt", // Sales
-			},
-		},
-		{
-			Id:    "2IC11NXgAkNrKRk9nukbPRRKMhI",
-			Name:  "Sales",
-			Owner: "2IC0WoaHVvl2GIQppXQH0flK1yJ", // Frank
-			GroupAssignments: []string{
-				"2IC0WjepYDBsRp6b7cqrumGsVGt", // Sales
-			},
-		},
-	}
-
-	return db
+	return nil, false
 }
 
 var allTableDescriptors = []tableDescriptor{
@@ -126,7 +155,7 @@ var allTableDescriptors = []tableDescriptor{
 
 type tableDescriptor interface {
 	Name() string
-	Schema() (string, []interface{})
+	Schema() (string, []any)
 }
 
 var users = (*usersTable)(nil)
@@ -137,8 +166,8 @@ func (t *usersTable) Name() string {
 	return "users"
 }
 
-func (t *usersTable) Schema() (string, []interface{}) {
-	return "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT)", []interface{}{}
+func (t *usersTable) Schema() (string, []any) {
+	return "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT)", []any{}
 }
 
 var groups = (*groupsTable)(nil)
@@ -149,8 +178,8 @@ func (t *groupsTable) Name() string {
 	return "groups"
 }
 
-func (t *groupsTable) Schema() (string, []interface{}) {
-	return "CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, admins TEXT NOT NULL, members TEXT NOT NULL)", []interface{}{}
+func (t *groupsTable) Schema() (string, []any) {
+	return "CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, admins TEXT NOT NULL, members TEXT NOT NULL)", []any{}
 }
 
 var roles = (*rolesTable)(nil)
@@ -161,8 +190,8 @@ func (t *rolesTable) Name() string {
 	return "roles"
 }
 
-func (t *rolesTable) Schema() (string, []interface{}) {
-	return "CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, direct_assignments TEXT NOT NULL, group_assignments TEXT NOT NULL)", []interface{}{}
+func (t *rolesTable) Schema() (string, []any) {
+	return "CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, direct_assignments TEXT NOT NULL, group_assignments TEXT NOT NULL)", []any{}
 }
 
 var projects = (*projectsTable)(nil)
@@ -173,8 +202,8 @@ func (t *projectsTable) Name() string {
 	return "projects"
 }
 
-func (t *projectsTable) Schema() (string, []interface{}) {
-	return "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, group_assignments TEXT NOT NULL)", []interface{}{}
+func (t *projectsTable) Schema() (string, []any) {
+	return "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, group_assignments TEXT NOT NULL)", []any{}
 }
 
 var passwords = (*passwordsTable)(nil)
@@ -185,6 +214,6 @@ func (t *passwordsTable) Name() string {
 	return "passwords"
 }
 
-func (t *passwordsTable) Schema() (string, []interface{}) {
-	return "CREATE TABLE IF NOT EXISTS passwords (id TEXT PRIMARY KEY, password TEXT NOT NULL, user_id TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id))", []interface{}{}
+func (t *passwordsTable) Schema() (string, []any) {
+	return "CREATE TABLE IF NOT EXISTS passwords (id TEXT PRIMARY KEY, password TEXT NOT NULL, user_id TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id))", []any{}
 }

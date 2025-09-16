@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -84,6 +85,19 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 		return nil, "", nil, err
 	}
 
+	offset := 0
+	limit := 1000
+	if pToken != nil {
+		if pToken.Token != "" {
+			offset, err = strconv.Atoi(pToken.Token)
+			if err != nil {
+				return nil, "", nil, err
+			}
+		}
+		if pToken.Size > 0 {
+			limit = pToken.Size
+		}
+	}
 	var ret []*v2.Grant
 
 	// Grant the owner entitlement to the project owner
@@ -92,28 +106,37 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 		return nil, "", nil, err
 	}
 
-	ret = append(ret, sdkGrant.NewGrant(resource, projectOwnerEntitlement, ownerID))
-	// Owners also receive the access entitlement
-	ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, ownerID))
-
-	// Iterate group assignments
-	for _, grpID := range project.GroupAssignments {
-		pID, err := sdkResource.NewResourceID(groupResourceType, grpID)
-		if err != nil {
-			return nil, "", nil, err
-		}
-
-		entitlementIDs := []string{
-			fmt.Sprintf("group:%s:member", grpID),
-			fmt.Sprintf("group:%s:admin", grpID),
-		}
-		grant := sdkGrant.NewGrant(resource, projectAccessEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
-			EntitlementIds: entitlementIDs,
-		}))
-		ret = append(ret, grant)
+	if project.Owner != "" && offset == 0 {
+		ret = append(ret, sdkGrant.NewGrant(resource, projectOwnerEntitlement, ownerID))
+		// Owners also receive the access entitlement
+		ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, ownerID))
 	}
 
-	return ret, "", nil, nil
+	// Iterate group assignments
+	if len(project.GroupAssignments) > offset {
+		end := min(offset+limit, len(project.GroupAssignments))
+		for _, grpID := range project.GroupAssignments[offset:end] {
+			pID, err := sdkResource.NewResourceID(groupResourceType, grpID)
+			if err != nil {
+				return nil, "", nil, err
+			}
+
+			entitlementIDs := []string{
+				fmt.Sprintf("group:%s:member", grpID),
+				fmt.Sprintf("group:%s:admin", grpID),
+			}
+			grant := sdkGrant.NewGrant(resource, projectAccessEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+				EntitlementIds: entitlementIDs,
+			}))
+			ret = append(ret, grant)
+		}
+	}
+
+	nextPageToken := ""
+	if len(project.GroupAssignments) > offset+limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+	return ret, nextPageToken, nil, nil
 }
 
 func newProjectBuilder(client *client.Client) *projectBuilder {
