@@ -109,6 +109,19 @@ func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, cre
 
 	var plainTextPassword string
 	var ptd *v2.PlaintextData
+	if credentialOptions.GetEncryptedPassword() != nil {
+		plainTextPassword, err = crypto.GeneratePassword(credentialOptions)
+		if err != nil {
+			fmt.Printf("error generating password: %v\n", err)
+			return nil, nil, err
+		}
+		ptd = &v2.PlaintextData{
+			Name:  "password",
+			Bytes: []byte(plainTextPassword),
+		}
+
+	}
+
 	if credentialOptions.GetRandomPassword() != nil {
 		plainTextPassword, err = crypto.GeneratePassword(credentialOptions)
 		if err != nil {
