@@ -1,11 +1,9 @@
 module github.com/conductorone/baton-demo
 
-go 1.23.4
-
-toolchain go1.24.1
+go 1.25
 
 require (
-	github.com/conductorone/baton-sdk v0.3.49
+	github.com/conductorone/baton-sdk v0.3.57
 	github.com/doug-martin/goqu/v9 v9.19.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/segmentio/ksuid v1.0.4
@@ -60,7 +58,7 @@ require (
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jellydator/ttlcache/v3 v3.3.0 // indirect
-	github.com/klauspost/compress v1.17.11 // indirect
+	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20240909124753-873cd0166683 // indirect
 	github.com/magiconair/properties v1.8.9 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
