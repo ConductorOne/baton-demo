@@ -5,7 +5,9 @@ go 1.25
 require (
 	github.com/conductorone/baton-sdk v0.3.57
 	github.com/doug-martin/goqu/v9 v9.19.0
+	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
+	github.com/quasilyte/go-ruleguard/dsl v0.3.22
 	github.com/segmentio/ksuid v1.0.4
 	go.uber.org/zap v1.27.0
 	google.golang.org/grpc v1.71.0

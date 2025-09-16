@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"slices"
 	"strconv"
@@ -109,7 +108,6 @@ func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 	if c.config.InitDb {
 		err = c.initDB(ctx)
 		if err != nil {
-			log.Fatal(err)
 			return nil, err
 		}
 	}
