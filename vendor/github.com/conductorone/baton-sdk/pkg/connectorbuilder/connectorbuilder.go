@@ -20,6 +20,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/crypto"
+	"github.com/conductorone/baton-sdk/pkg/crypto/providers/jwk"
 	"github.com/conductorone/baton-sdk/pkg/metrics"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/retry"
@@ -274,6 +275,7 @@ type builderImpl struct {
 	ticketingEnabled        bool
 	m                       *metrics.M
 	nowFunc                 func() time.Time
+	clientSecret            []byte
 }
 
 func (b *builderImpl) BulkCreateTickets(ctx context.Context, request *v2.TicketsServiceBulkCreateTicketsRequest) (*v2.TicketsServiceBulkCreateTicketsResponse, error) {
@@ -481,6 +483,8 @@ func (b *builderImpl) GetTicketSchema(ctx context.Context, request *v2.TicketsSe
 func NewConnector(ctx context.Context, in interface{}, opts ...Opt) (types.ConnectorServer, error) {
 	switch c := in.(type) {
 	case ConnectorBuilder:
+		clientSecret := ctx.Value(crypto.ContextClientSecretKey)
+		clientSecretBytes, _ := clientSecret.([]byte)
 		ret := &builderImpl{
 			resourceBuilders:        make(map[string]ResourceSyncer),
 			resourceProvisioners:    make(map[string]ResourceProvisioner),
@@ -497,6 +501,7 @@ func NewConnector(ctx context.Context, in interface{}, opts ...Opt) (types.Conne
 			cb:                      c,
 			ticketManager:           nil,
 			nowFunc:                 time.Now,
+			clientSecret:            clientSecretBytes,
 		}
 
 		err := ret.options(opts...)
@@ -1365,7 +1370,34 @@ func (b *builderImpl) RotateCredential(ctx context.Context, request *v2.RotateCr
 		return nil, status.Error(codes.Unimplemented, "resource type does not have credential manager configured")
 	}
 
-	plaintexts, annos, err := manager.Rotate(ctx, request.GetResourceId(), request.GetCredentialOptions())
+	opts := request.GetCredentialOptions()
+
+	if opts.GetEncryptedPassword() != nil {
+		encryptedPassword := opts.GetEncryptedPassword()
+		if encryptedPassword.GetDecryptionConfig() != nil {
+			return nil, status.Error(codes.InvalidArgument, "decryption config should never be supplied for encrypted passwords")
+		}
+
+		if b.clientSecret == nil {
+			return nil, status.Error(codes.InvalidArgument, "client-secret is required")
+		}
+
+		encryptedPassword.DecryptionConfig = &v2.DecryptionConfig{
+			Provider: jwk.EncryptionProviderJwkPrivate,
+			Config: &v2.DecryptionConfig_JwkPrivateKeyConfig{
+				JwkPrivateKeyConfig: &v2.DecryptionConfig_JWKPrivateKeyConfig{
+					PrivKey: b.clientSecret,
+				},
+			},
+		}
+		// Both Matt & Geoff think this constraint is silly.
+		if len(request.GetEncryptionConfigs()) > 0 {
+			l.Error("error: encryption configs should never be supplied for encrypted passwords")
+			return nil, status.Error(codes.InvalidArgument, "encryption configs should never be supplied for encrypted passwords")
+		}
+	}
+
+	plaintexts, annos, err := manager.Rotate(ctx, request.GetResourceId(), opts)
 	if err != nil {
 		l.Error("error: rotate credentials on resource failed", zap.Error(err))
 		b.m.RecordTaskFailure(ctx, tt, b.nowFunc().Sub(start))

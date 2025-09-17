@@ -1,13 +1,19 @@
 package crypto
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 
+	"github.com/go-jose/go-jose/v4"
+
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/crypto/providers"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -21,13 +27,46 @@ const (
 var ErrInvalidCredentialOptions = errors.New("unknown credential options")
 var ErrInvalidPasswordLength = errors.New("invalid password length")
 
-func GeneratePassword(credentialOptions *v2.CredentialOptions) (string, error) {
+func GeneratePassword(ctx context.Context, credentialOptions *v2.CredentialOptions) (string, error) {
 	randomPassword := credentialOptions.GetRandomPassword()
 	if randomPassword != nil {
 		return GenerateRandomPassword(randomPassword)
 	}
 
+	encryptedPassword := credentialOptions.GetEncryptedPassword()
+	if encryptedPassword != nil {
+		return DecryptPassword(ctx, encryptedPassword)
+	}
+
 	return "", ErrInvalidCredentialOptions
+}
+
+func DecryptPassword(ctx context.Context, encryptedPassword *v2.CredentialOptions_EncryptedPassword) (string, error) {
+	decryptionConfig := encryptedPassword.GetDecryptionConfig()
+	if decryptionConfig == nil {
+		return "", ErrInvalidCredentialOptions
+	}
+
+	provider, err := providers.GetDecryptionProviderForConfig(ctx, decryptionConfig)
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "error getting decryption provider for config: %v", err)
+	}
+	key := decryptionConfig.GetJwkPrivateKeyConfig().GetPrivKey()
+	if len(key) == 0 {
+		return "", status.Errorf(codes.InvalidArgument, "decryption config key is empty")
+	}
+	secret := &jose.JSONWebKey{}
+	err = secret.UnmarshalJSON(key)
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "error unmarshalling secret: %v", err)
+	}
+
+	plaintext, err := provider.Decrypt(ctx, encryptedPassword.GetEncryptedPassword(), secret)
+	if err != nil {
+		return "", status.Errorf(codes.Internal, "error decrypting password: %v", err)
+	}
+
+	return string(plaintext.Bytes), nil
 }
 
 func addBasicValidityCharacters(password *strings.Builder) error {
