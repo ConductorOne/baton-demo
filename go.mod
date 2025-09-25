@@ -3,7 +3,7 @@ module github.com/conductorone/baton-demo
 go 1.25
 
 require (
-	github.com/conductorone/baton-sdk v0.3.58-0.20250917000924-8b4c0526b012
+	github.com/conductorone/baton-sdk v0.4.5
 	github.com/doug-martin/goqu/v9 v9.19.0
 	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
@@ -17,6 +17,7 @@ require (
 require (
 	filippo.io/age v1.2.1 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/aws/aws-lambda-go v1.47.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.36.3 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.10 // indirect

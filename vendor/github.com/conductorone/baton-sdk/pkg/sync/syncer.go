@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/conductorone/baton-sdk/pkg/bid"
 	"github.com/conductorone/baton-sdk/pkg/dotc1z"
 	"github.com/conductorone/baton-sdk/pkg/retry"
@@ -215,6 +216,7 @@ type syncer struct {
 	skipEntitlementsAndGrants           bool
 	resourceTypeTraits                  map[string][]v2.ResourceType_Trait
 	syncType                            connectorstore.SyncType
+	injectSyncIDAnnotation              bool
 }
 
 const minCheckpointInterval = 10 * time.Second
@@ -313,6 +315,13 @@ func (s *syncer) startOrResumeSync(ctx context.Context) (string, bool, error) {
 	return syncID, newSync, nil
 }
 
+func (s *syncer) getActiveSyncID() string {
+	if s.injectSyncIDAnnotation {
+		return s.syncID
+	}
+	return ""
+}
+
 // Sync starts the syncing process. The sync process is driven by the action stack that is part of the state object.
 // For each page of data that is required to be fetched from the connector, a new action is pushed on to the stack. Once
 // an action is completed, it is popped off of the queue. Before processing each action, we checkpoint the state object
@@ -340,10 +349,22 @@ func (s *syncer) Sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	_, err = s.connector.Validate(ctx, &v2.ConnectorServiceValidateRequest{})
+	resp, err := s.connector.Validate(ctx, &v2.ConnectorServiceValidateRequest{})
 	if err != nil {
 		return err
+	}
+
+	if resp.SdkVersion != "" {
+		sdkVersion, err := semver.NewVersion(resp.SdkVersion)
+		if err != nil {
+			l.Warn("error parsing sdk version", zap.String("sdk_version", resp.SdkVersion), zap.Error(err))
+		} else {
+			supportsActiveSyncId, err := semver.NewConstraint(">= 0.4.3")
+			if err != nil {
+				return fmt.Errorf("error parsing sdk version %s: %w", resp.SdkVersion, err)
+			}
+			s.injectSyncIDAnnotation = supportsActiveSyncId.Check(sdkVersion)
+		}
 	}
 
 	// Validate any targeted resource IDs before starting a sync.
@@ -359,6 +380,19 @@ func (s *syncer) Sync(ctx context.Context) error {
 	syncID, newSync, err := s.startOrResumeSync(ctx)
 	if err != nil {
 		return err
+	}
+	s.syncID = syncID
+
+	// Set the syncID on the wrapper after we have it
+	if syncID == "" {
+		err = errors.New("no syncID found after starting or resuming sync")
+		l.Error("no syncID found after starting or resuming sync", zap.Error(err))
+		return err
+	}
+
+	// Add ActiveSync to context once after we have the syncID
+	if syncID != "" {
+		ctx = types.SetSyncIDInContext(ctx, syncID)
 	}
 
 	span.SetAttributes(attribute.String("sync_id", syncID))
@@ -571,7 +605,9 @@ func (s *syncer) Sync(ctx context.Context) error {
 		return err
 	}
 
-	_, err = s.connector.Cleanup(ctx, &v2.ConnectorServiceCleanupRequest{})
+	_, err = s.connector.Cleanup(ctx, &v2.ConnectorServiceCleanupRequest{
+		ActiveSyncId: s.getActiveSyncID(),
+	})
 	if err != nil {
 		l.Error("error clearing connector caches", zap.Error(err))
 	}
@@ -643,7 +679,10 @@ func (s *syncer) SyncResourceTypes(ctx context.Context) error {
 		return err
 	}
 
-	resp, err := s.connector.ListResourceTypes(ctx, &v2.ResourceTypesServiceListResourceTypesRequest{PageToken: pageToken})
+	resp, err := s.connector.ListResourceTypes(ctx, &v2.ResourceTypesServiceListResourceTypesRequest{
+		PageToken:    pageToken,
+		ActiveSyncId: s.getActiveSyncID(),
+	})
 	if err != nil {
 		return err
 	}
@@ -704,6 +743,7 @@ func (s *syncer) getResourceFromConnector(ctx context.Context, resourceID *v2.Re
 		&v2.ResourceGetterServiceGetResourceRequest{
 			ResourceId:       resourceID,
 			ParentResourceId: parentResourceID,
+			ActiveSyncId:     s.getActiveSyncID(),
 		},
 	)
 	if err == nil {
@@ -850,6 +890,7 @@ func (s *syncer) syncResources(ctx context.Context) error {
 	req := &v2.ResourcesServiceListResourcesRequest{
 		ResourceTypeId: s.state.ResourceTypeID(ctx),
 		PageToken:      s.state.PageToken(ctx),
+		ActiveSyncId:   s.getActiveSyncID(),
 	}
 	if s.state.ParentResourceTypeID(ctx) != "" && s.state.ParentResourceID(ctx) != "" {
 		req.ParentResourceId = &v2.ResourceId{
@@ -1079,9 +1120,12 @@ func (s *syncer) syncEntitlementsForResource(ctx context.Context, resourceID *v2
 
 	pageToken := s.state.PageToken(ctx)
 
+	resource := resourceResponse.Resource
+
 	resp, err := s.connector.ListEntitlements(ctx, &v2.EntitlementsServiceListEntitlementsRequest{
-		Resource:  resourceResponse.Resource,
-		PageToken: pageToken,
+		Resource:     resource,
+		PageToken:    pageToken,
+		ActiveSyncId: s.getActiveSyncID(),
 	})
 	if err != nil {
 		return err
@@ -1277,7 +1321,6 @@ func (s *syncer) SyncGrantExpansion(ctx context.Context) error {
 			l.Info("Expanding grants...")
 			s.handleInitialActionForStep(ctx, *s.state.Current())
 		}
-
 		resp, err := s.store.ListGrants(ctx, &v2.GrantsServiceListGrantsRequest{PageToken: pageToken})
 		if err != nil {
 			return err
@@ -1545,7 +1588,6 @@ func (s *syncer) fetchEtaggedGrantsForResource(
 	storeAnnos.Update(&c1zpb.SyncDetails{
 		Id: prevSyncID,
 	})
-
 	for {
 		prevGrantsResp, err := s.store.ListGrants(ctx, &v2.GrantsServiceListGrantsRequest{
 			Resource:    resource,
@@ -1601,7 +1643,11 @@ func (s *syncer) syncGrantsForResource(ctx context.Context, resourceID *v2.Resou
 	resourceAnnos.Update(prevEtag)
 	resource.Annotations = resourceAnnos
 
-	resp, err := s.connector.ListGrants(ctx, &v2.GrantsServiceListGrantsRequest{Resource: resource, PageToken: pageToken})
+	resp, err := s.connector.ListGrants(ctx, &v2.GrantsServiceListGrantsRequest{
+		Resource:     resource,
+		PageToken:    pageToken,
+		ActiveSyncId: s.getActiveSyncID(),
+	})
 	if err != nil {
 		return err
 	}
@@ -1989,6 +2035,7 @@ func (s *syncer) listExternalResourcesForResourceType(ctx context.Context, resou
 func (s *syncer) listExternalEntitlementsForResource(ctx context.Context, resource *v2.Resource) ([]*v2.Entitlement, error) {
 	ents := make([]*v2.Entitlement, 0)
 	entitlementToken := ""
+
 	for {
 		entitlementsList, err := s.externalResourceReader.ListEntitlements(ctx, &v2.EntitlementsServiceListEntitlementsRequest{
 			PageToken: entitlementToken,

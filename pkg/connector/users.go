@@ -22,6 +22,9 @@ type userBuilder struct {
 	client *client.Client
 }
 
+var _ connectorbuilder.AccountManager = &userBuilder{}
+var _ connectorbuilder.CredentialManager = &userBuilder{}
+
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
 }
@@ -101,14 +104,14 @@ func (r *userBuilder) RotateCapabilityDetails(ctx context.Context) (*v2.Credenti
 	}, nil, nil
 }
 
-func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, credentialOptions *v2.CredentialOptions) ([]*v2.PlaintextData, annotations.Annotations, error) {
+func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, credentialOptions *v2.LocalCredentialOptions) ([]*v2.PlaintextData, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 	if resourceId.ResourceType != userResourceType.Id {
 		return nil, nil, status.Error(codes.InvalidArgument, "baton-demo: non-user resource passed to rotate credentials")
 	}
 
-	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetEncryptedPassword() == nil {
-		return nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no password or encrypted password provided")
+	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetPlaintextPassword() == nil {
+		return nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no password provided")
 	}
 
 	user, err := o.client.GetUser(ctx, resourceId.Resource)
@@ -148,12 +151,12 @@ func (o *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.C
 func (o *userBuilder) CreateAccount(
 	ctx context.Context,
 	accountInfo *v2.AccountInfo,
-	credentialOptions *v2.CredentialOptions,
+	credentialOptions *v2.LocalCredentialOptions,
 ) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetEncryptedPassword() == nil {
-		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no password or encrypted password provided")
+	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetPlaintextPassword() == nil {
+		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no password provided")
 	}
 
 	l.Info("Generating password")
