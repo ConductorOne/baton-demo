@@ -57,6 +57,52 @@ var helloIn1Minute = &v2.BatonActionSchema{
 	},
 }
 
+var disableAccount = &v2.BatonActionSchema{
+	Name: "disableAccount",
+	Arguments: []*config.Field{
+		{
+			Name:        "accountId",
+			DisplayName: "Account ID",
+			Field:       &config.Field_StringField{},
+			IsRequired:  true,
+		},
+	},
+	ReturnTypes: []*config.Field{
+		{
+			Name:        "success",
+			DisplayName: "Success",
+			Field:       &config.Field_BoolField{},
+		},
+	},
+	ActionType: []v2.ActionType{
+		v2.ActionType_ACTION_TYPE_ACCOUNT,
+		v2.ActionType_ACTION_TYPE_ACCOUNT_DISABLE,
+	},
+}
+
+var enableAccount = &v2.BatonActionSchema{
+	Name: "enableAccount",
+	Arguments: []*config.Field{
+		{
+			Name:        "accountId",
+			DisplayName: "Account ID",
+			Field:       &config.Field_StringField{},
+			IsRequired:  true,
+		},
+	},
+	ReturnTypes: []*config.Field{
+		{
+			Name:        "success",
+			DisplayName: "Success",
+			Field:       &config.Field_BoolField{},
+		},
+	},
+	ActionType: []v2.ActionType{
+		v2.ActionType_ACTION_TYPE_ACCOUNT,
+		v2.ActionType_ACTION_TYPE_ACCOUNT_ENABLE,
+	},
+}
+
 func (d *Demo) RegisterActionManager(ctx context.Context) (connectorbuilder.CustomActionManager, error) {
 	actionManager := actions.NewActionManager(ctx)
 
@@ -68,6 +114,16 @@ func (d *Demo) RegisterActionManager(ctx context.Context) (connectorbuilder.Cust
 
 	// helloIn1Minute action
 	err = actionManager.RegisterAction(ctx, helloIn1Minute.Name, helloIn1Minute, d.helloIn1Minute)
+	if err != nil {
+		return nil, err
+	}
+
+	err = actionManager.RegisterAction(ctx, enableAccount.Name, enableAccount, d.enableAccount)
+	if err != nil {
+		return nil, err
+	}
+
+	err = actionManager.RegisterAction(ctx, disableAccount.Name, disableAccount, d.disableAccount)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +166,38 @@ func (d *Demo) helloIn1Minute(ctx context.Context, args *structpb.Struct) (*stru
 	response := &structpb.Struct{
 		Fields: map[string]*structpb.Value{
 			"hello": structpb.NewStringValue("Hello, " + name.GetStringValue() + "!"),
+		},
+	}
+	return response, nil, nil
+}
+
+func (d *Demo) enableAccount(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	accountId, ok := args.Fields["accountId"]
+	if !ok {
+		return nil, nil, fmt.Errorf("missing required argument accountId")
+	}
+
+	fmt.Println("Enabling account", accountId.GetStringValue())
+
+	response := &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			"success": structpb.NewBoolValue(true),
+		},
+	}
+	return response, nil, nil	
+}
+
+func (d *Demo) disableAccount(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	accountId, ok := args.Fields["accountId"]
+	if !ok {
+		return nil, nil, fmt.Errorf("missing required argument accountId")
+	}
+	
+	fmt.Println("Disabling account", accountId.GetStringValue())
+
+	response := &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			"success": structpb.NewBoolValue(true),
 		},
 	}
 	return response, nil, nil
