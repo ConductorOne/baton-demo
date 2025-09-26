@@ -30,15 +30,28 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	// Determine the user status based on the enabled field
+	var status v2.UserTrait_Status_Status
+	var statusMessage string
+	if u.Enabled {
+		status = v2.UserTrait_Status_STATUS_ENABLED
+		statusMessage = "Enabled"
+	} else {
+		status = v2.UserTrait_Status_STATUS_DISABLED
+		statusMessage = "Disabled"
+	}
+
 	attrs := make(map[string]any)
 	for k, v := range u.Attrs {
 		attrs[k] = v
 	}
+	// Add the enabled status to the profile
+	attrs["enabled"] = u.Enabled
 
 	traits := []sdkResource.UserTraitOption{
 		sdkResource.WithEmail(u.Email, true),
 		sdkResource.WithUserLogin(u.Id),
-		sdkResource.WithDetailedStatus(v2.UserTrait_Status_STATUS_ENABLED, "Enabled"),
+		sdkResource.WithDetailedStatus(status, statusMessage),
 		sdkResource.WithEmployeeID(u.Id),
 		sdkResource.WithAccountType(v2.UserTrait_ACCOUNT_TYPE_HUMAN),
 		sdkResource.WithUserProfile(attrs),

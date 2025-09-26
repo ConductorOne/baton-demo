@@ -233,6 +233,21 @@ func (d *Demo) enableAccount(ctx context.Context, args *structpb.Struct) (*struc
 	}
 
 	l.Info("enabling account", zap.String("accountId", accountId.GetStringValue()))
+	user, err := d.client.GetUser(ctx, accountId.GetStringValue())
+	if err != nil {
+		l.Error("error getting user", zap.Error(err))
+		return nil, nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	// Update the user's enabled status to true
+	user.Enabled = true
+	err = d.client.UpdateUser(ctx, user)
+	if err != nil {
+		l.Error("error updating user", zap.Error(err))
+		return nil, nil, fmt.Errorf("failed to enable account: %w", err)
+	}
+
+	l.Info("enabled account", zap.String("accountId", accountId.GetStringValue()))
 
 	response := &structpb.Struct{
 		Fields: map[string]*structpb.Value{
@@ -325,6 +340,21 @@ func (d *Demo) disableAccount(ctx context.Context, args *structpb.Struct) (*stru
 	}
 
 	l.Info("disabling account", zap.String("accountId", accountId.GetStringValue()))
+	user, err := d.client.GetUser(ctx, accountId.GetStringValue())
+	if err != nil {
+		l.Error("error getting user", zap.Error(err))
+		return nil, nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	// Update the user's enabled status to false
+	user.Enabled = false
+	err = d.client.UpdateUser(ctx, user)
+	if err != nil {
+		l.Error("error updating user", zap.Error(err))
+		return nil, nil, fmt.Errorf("failed to disable account: %w", err)
+	}
+
+	l.Info("disabled account", zap.String("accountId", accountId.GetStringValue()))
 
 	response := &structpb.Struct{
 		Fields: map[string]*structpb.Value{

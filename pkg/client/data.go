@@ -124,9 +124,10 @@ func (g *generator) Next() (*dbResource, bool) {
 		userEmail := fmt.Sprintf("user-%d@example.com", g.currentUser)
 		db := &dbResource{
 			User: &User{
-				Id:    userId(g.currentUser),
-				Name:  userFullName,
-				Email: userEmail,
+				Id:      userId(g.currentUser),
+				Name:    userFullName,
+				Email:   userEmail,
+				Enabled: true, // Default to enabled
 				Attrs: map[string]string{
 					"full_name": userFullName,
 					"email":     userEmail,
@@ -173,7 +174,7 @@ func (t *usersTable) Name() string {
 }
 
 func (t *usersTable) Schema() (string, []any) {
-	return "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT, attrs BLOB)", []any{}
+	return "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT, enabled BOOLEAN DEFAULT 1, attrs BLOB)", []any{}
 }
 
 var groups = (*groupsTable)(nil)
