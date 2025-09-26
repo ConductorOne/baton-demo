@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
+
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
@@ -172,28 +175,31 @@ func (d *Demo) helloIn1Minute(ctx context.Context, args *structpb.Struct) (*stru
 }
 
 func (d *Demo) enableAccount(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
 	accountId, ok := args.Fields["accountId"]
 	if !ok {
 		return nil, nil, fmt.Errorf("missing required argument accountId")
 	}
 
-	fmt.Println("Enabling account", accountId.GetStringValue())
+	l.Info("enabling account", zap.String("accountId", accountId.GetStringValue()))
 
 	response := &structpb.Struct{
 		Fields: map[string]*structpb.Value{
 			"success": structpb.NewBoolValue(true),
 		},
 	}
-	return response, nil, nil	
+	return response, nil, nil
 }
 
 func (d *Demo) disableAccount(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
 	accountId, ok := args.Fields["accountId"]
 	if !ok {
 		return nil, nil, fmt.Errorf("missing required argument accountId")
 	}
-	
-	fmt.Println("Disabling account", accountId.GetStringValue())
+
+	l.Info("disabling account", zap.String("accountId", accountId.GetStringValue()))
 
 	response := &structpb.Struct{
 		Fields: map[string]*structpb.Value{
