@@ -106,6 +106,45 @@ var enableAccount = &v2.BatonActionSchema{
 	},
 }
 
+var updateUserAttrsActionSchema = &v2.BatonActionSchema{
+	Name: "update_user_attrs",
+	Arguments: []*config.Field{
+		{
+			Name:        "resource_id",
+			DisplayName: "User Resource ID",
+			Description: "The ID of the user to update.",
+			Field:       &config.Field_StringField{},
+			IsRequired:  true,
+		},
+		{
+			Name:        "attrs",
+			DisplayName: "Attributes",
+			Description: "The updated attribute data.",
+			Field:       &config.Field_StringMapField{},
+			IsRequired:  true,
+		},
+		{
+			Name:        "attrs_update_mask",
+			DisplayName: "Attributes Update Mask",
+			Description: "The attributes to update.",
+			Field:       &config.Field_StringSliceField{},
+			IsRequired:  true,
+		},
+	},
+	ReturnTypes: []*config.Field{
+		{
+			Name:        "success",
+			DisplayName: "Success",
+			Description: "Whether the account was updated successfully",
+			Field:       &config.Field_BoolField{},
+		},
+	},
+	ActionType: []v2.ActionType{
+		v2.ActionType_ACTION_TYPE_ACCOUNT,
+		v2.ActionType_ACTION_TYPE_ACCOUNT_UPDATE_PROFILE,
+	},
+}
+
 func (d *Demo) RegisterActionManager(ctx context.Context) (connectorbuilder.CustomActionManager, error) {
 	actionManager := actions.NewActionManager(ctx)
 
@@ -127,6 +166,11 @@ func (d *Demo) RegisterActionManager(ctx context.Context) (connectorbuilder.Cust
 	}
 
 	err = actionManager.RegisterAction(ctx, disableAccount.Name, disableAccount, d.disableAccount)
+	if err != nil {
+		return nil, err
+	}
+
+	err = actionManager.RegisterAction(ctx, updateUserAttrsActionSchema.Name, updateUserAttrsActionSchema, d.updateUserAttributes)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +226,37 @@ func (d *Demo) enableAccount(ctx context.Context, args *structpb.Struct) (*struc
 	}
 
 	l.Info("enabling account", zap.String("accountId", accountId.GetStringValue()))
+
+	response := &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			"success": structpb.NewBoolValue(true),
+		},
+	}
+	return response, nil, nil
+}
+
+func (d *Demo) updateUserAttributes(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+
+	userID := args.Fields["resource_id"].GetStringValue()
+
+	attrsField := args.Fields["attrs"].GetStructValue()
+	attrs := make(map[string]string)
+	for k, v := range attrsField.Fields {
+		attrs[k] = v.GetStringValue()
+	}
+
+	attrsUpdateMaskList := args.Fields["attrs_update_mask"].GetListValue()
+	var attrsUpdateMask []string
+	if attrsUpdateMaskList != nil {
+		for _, v := range attrsUpdateMaskList.Values {
+			attrsUpdateMask = append(attrsUpdateMask, v.GetStringValue())
+		}
+	}
+
+	for _, attrName := range attrsUpdateMask {
+		l.Info("updating user attribute", zap.String("user_id", userID), zap.String("attr_name", attrName), zap.String("attr_value", attrs[attrName]))
+	}
 
 	response := &structpb.Struct{
 		Fields: map[string]*structpb.Value{
