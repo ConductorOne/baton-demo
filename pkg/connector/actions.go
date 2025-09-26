@@ -238,18 +238,29 @@ func (d *Demo) enableAccount(ctx context.Context, args *structpb.Struct) (*struc
 func (d *Demo) updateUserAttributes(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	userID := args.Fields["resource_id"].GetStringValue()
+	resourceID, ok := args.Fields["resource_id"]
+	if !ok {
+		return nil, nil, fmt.Errorf("missing required argument resource_id")
+	}
+	userID := resourceID.GetStringValue()
 
-	attrsField := args.Fields["attrs"].GetStructValue()
+	attrsField, ok := args.Fields["attrs"]
+	if !ok {
+		return nil, nil, fmt.Errorf("missing required argument attrs")
+	}
 	attrs := make(map[string]string)
-	for k, v := range attrsField.Fields {
+	for k, v := range attrsField.GetStructValue().Fields {
 		attrs[k] = v.GetStringValue()
 	}
 
-	attrsUpdateMaskList := args.Fields["attrs_update_mask"].GetListValue()
+	attrsUpdateMaskList, ok := args.Fields["attrs_update_mask"]
+	if !ok {
+		return nil, nil, fmt.Errorf("missing required argument attrs_update_mask")
+	}
+
 	var attrsUpdateMask []string
 	if attrsUpdateMaskList != nil {
-		for _, v := range attrsUpdateMaskList.Values {
+		for _, v := range attrsUpdateMaskList.GetListValue().Values {
 			attrsUpdateMask = append(attrsUpdateMask, v.GetStringValue())
 		}
 	}
@@ -263,6 +274,7 @@ func (d *Demo) updateUserAttributes(ctx context.Context, args *structpb.Struct) 
 			"success": structpb.NewBoolValue(true),
 		},
 	}
+
 	return response, nil, nil
 }
 
