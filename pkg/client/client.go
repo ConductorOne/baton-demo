@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"slices"
@@ -35,6 +36,7 @@ type User struct {
 	Id    string
 	Name  string
 	Email string
+	Attrs map[string]string
 }
 
 type Group struct {
@@ -154,10 +156,15 @@ func (c *Client) initDB(ctx context.Context) error {
 
 		switch {
 		case dbResource.User != nil:
+			attrs, err := json.Marshal(dbResource.User.Attrs)
+			if err != nil {
+				return err
+			}
 			row := goqu.Record{
 				"id":    dbResource.User.Id,
 				"name":  dbResource.User.Name,
 				"email": dbResource.User.Email,
+				"attrs": attrs,
 			}
 			baseUserQ := c.db.Insert(users.Name()).Prepared(true)
 			baseUserQ = baseUserQ.Rows(row)
@@ -272,7 +279,7 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email").
+	q = q.Select("id", "name", "email", "attrs").
 		Order(goqu.C("id").Asc()).
 		Limit(uint(limit)).  //nolint:gosec // This won't underflow
 		Offset(uint(offset)) //nolint:gosec // This won't underflow
@@ -290,7 +297,12 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	usersList := []*User{}
 	for rows.Next() {
 		user := &User{}
-		err = rows.Scan(&user.Id, &user.Name, &user.Email)
+		attrsBytes := []byte{}
+		err = rows.Scan(&user.Id, &user.Name, &user.Email, &attrsBytes)
+		if err != nil {
+			return nil, "", err
+		}
+		err = json.Unmarshal(attrsBytes, &user.Attrs)
 		if err != nil {
 			return nil, "", err
 		}
@@ -313,7 +325,7 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email")
+	q = q.Select("id", "name", "email", "attrs")
 	q = q.Where(goqu.C("id").Eq(userID))
 
 	query, args, err := q.ToSQL()
@@ -323,7 +335,13 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 
 	row := c.db.QueryRowContext(ctx, query, args...)
 	user := &User{}
-	err = row.Scan(&user.Id, &user.Name, &user.Email)
+	attrsBytes := []byte{}
+	err = row.Scan(&user.Id, &user.Name, &user.Email, &attrsBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.Unmarshal(attrsBytes, &user.Attrs)
 	if err != nil {
 		return nil, err
 	}
@@ -405,6 +423,38 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 		return nil, err
 	}
 	return user, nil
+}
+
+func (c *Client) UpdateUser(ctx context.Context, user *User) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	attrs, err := json.Marshal(user.Attrs)
+	if err != nil {
+		return err
+	}
+
+	q := c.db.Update(users.Name()).Prepared(true)
+	q = q.Set(goqu.Record{
+		"name":  user.Name,
+		"email": user.Email,
+		"attrs": attrs,
+	})
+	q = q.Where(goqu.C("id").Eq(user.Id))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *Client) ChangePassword(ctx context.Context, userID, password string) error {

@@ -120,11 +120,17 @@ func (g *generator) Next() (*dbResource, bool) {
 		return db, true
 	}
 	if g.currentUser < g.config.Users {
+		userFullName := fmt.Sprintf("User %07d", g.currentUser)
+		userEmail := fmt.Sprintf("user-%d@example.com", g.currentUser)
 		db := &dbResource{
 			User: &User{
 				Id:    userId(g.currentUser),
-				Name:  fmt.Sprintf("User %07d", g.currentUser),
-				Email: fmt.Sprintf("user-%d@example.com", g.currentUser),
+				Name:  userFullName,
+				Email: userEmail,
+				Attrs: map[string]string{
+					"full_name": userFullName,
+					"email":     userEmail,
+				},
 			},
 		}
 		g.currentUser++
@@ -167,7 +173,7 @@ func (t *usersTable) Name() string {
 }
 
 func (t *usersTable) Schema() (string, []any) {
-	return "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT)", []any{}
+	return "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT, attrs BLOB)", []any{}
 }
 
 var groups = (*groupsTable)(nil)

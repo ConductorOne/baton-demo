@@ -30,16 +30,18 @@ func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	attrs := make(map[string]any)
+	for k, v := range u.Attrs {
+		attrs[k] = v
+	}
+
 	traits := []sdkResource.UserTraitOption{
 		sdkResource.WithEmail(u.Email, true),
 		sdkResource.WithUserLogin(u.Id),
 		sdkResource.WithDetailedStatus(v2.UserTrait_Status_STATUS_ENABLED, "Enabled"),
 		sdkResource.WithEmployeeID(u.Id),
 		sdkResource.WithAccountType(v2.UserTrait_ACCOUNT_TYPE_HUMAN),
-		sdkResource.WithUserProfile(map[string]any{
-			"full_name": u.Name,
-			"email":     u.Email,
-		}),
+		sdkResource.WithUserProfile(attrs),
 	}
 	return sdkResource.NewUserResource(
 		u.Name,

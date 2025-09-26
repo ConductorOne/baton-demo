@@ -110,8 +110,15 @@ var updateUserAttrsActionSchema = &v2.BatonActionSchema{
 	Name: "update_user_attrs",
 	Arguments: []*config.Field{
 		{
+			Name:        "resource_type",
+			DisplayName: "Resource Type",
+			Description: "The type of the resource to update.",
+			Field:       &config.Field_StringField{},
+			IsRequired:  true,
+		},
+		{
 			Name:        "resource_id",
-			DisplayName: "User Resource ID",
+			DisplayName: "Resource ID",
 			Description: "The ID of the user to update.",
 			Field:       &config.Field_StringField{},
 			IsRequired:  true,
@@ -238,6 +245,15 @@ func (d *Demo) enableAccount(ctx context.Context, args *structpb.Struct) (*struc
 func (d *Demo) updateUserAttributes(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
+	resourceType, ok := args.Fields["resource_type"]
+	if !ok {
+		return nil, nil, fmt.Errorf("missing required argument resource_type")
+	}
+
+	if resourceType.GetStringValue() != "user" {
+		return nil, nil, fmt.Errorf("resource type must be user")
+	}
+
 	resourceID, ok := args.Fields["resource_id"]
 	if !ok {
 		return nil, nil, fmt.Errorf("missing required argument resource_id")
@@ -265,8 +281,30 @@ func (d *Demo) updateUserAttributes(ctx context.Context, args *structpb.Struct) 
 		}
 	}
 
+	user, err := d.client.GetUser(ctx, userID)
+	if err != nil {
+		l.Error("error getting user", zap.Error(err))
+		return nil, nil, err
+	}
+
+	l.Info("updating user attributes", zap.String("user_id", userID))
+
 	for _, attrName := range attrsUpdateMask {
-		l.Info("updating user attribute", zap.String("user_id", userID), zap.String("attr_name", attrName), zap.String("attr_value", attrs[attrName]))
+		l.Info("updating user attribute",
+			zap.String("user_id", userID),
+			zap.String("attr_name", attrName),
+			zap.String("attr_value", attrs[attrName]),
+			zap.String("old_value", user.Attrs[attrName]),
+		)
+		if v, ok := attrs[attrName]; ok {
+			user.Attrs[attrName] = v
+		}
+	}
+
+	err = d.client.UpdateUser(ctx, user)
+	if err != nil {
+		l.Error("error updating user", zap.Error(err))
+		return nil, nil, err
 	}
 
 	response := &structpb.Struct{
