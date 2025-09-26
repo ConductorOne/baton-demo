@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"slices"
@@ -32,9 +33,11 @@ import (
 // Projects always have a single User as the owner, and can be assigned to Groups
 
 type User struct {
-	Id    string
-	Name  string
-	Email string
+	Id      string
+	Name    string
+	Email   string
+	Enabled bool
+	Attrs   map[string]string
 }
 
 type Group struct {
@@ -105,6 +108,12 @@ func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 		}
 	}
 
+	// Add migration for enabled and attrs columns if they don't exist
+	err = c.migrateUsersTable(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	if c.config.InitDb {
 		err = c.initDB(ctx)
 		if err != nil {
@@ -117,6 +126,55 @@ func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 
 func (c *Client) Close() error {
 	return c.rawDB.Close()
+}
+
+func (c *Client) migrateUsersTable(ctx context.Context) error {
+	// Check if the enabled and attrs columns exist
+	query := "PRAGMA table_info(users)"
+	rows, err := c.rawDB.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasEnabledColumn := false
+	hasAttrsColumn := false
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, pk int
+		var defaultValue interface{}
+		err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk)
+		if err != nil {
+			return err
+		}
+		if name == "enabled" {
+			hasEnabledColumn = true
+		}
+		if name == "attrs" {
+			hasAttrsColumn = true
+		}
+	}
+
+	// If the enabled column doesn't exist, add it
+	if !hasEnabledColumn {
+		alterQuery := "ALTER TABLE users ADD COLUMN enabled BOOLEAN DEFAULT 1"
+		_, err = c.rawDB.ExecContext(ctx, alterQuery)
+		if err != nil {
+			return err
+		}
+	}
+
+	// If the attrs column doesn't exist, add it
+	if !hasAttrsColumn {
+		alterQuery := "ALTER TABLE users ADD COLUMN attrs BLOB"
+		_, err = c.rawDB.ExecContext(ctx, alterQuery)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (c *Client) validateDB() error {
@@ -154,10 +212,16 @@ func (c *Client) initDB(ctx context.Context) error {
 
 		switch {
 		case dbResource.User != nil:
+			attrs, err := json.Marshal(dbResource.User.Attrs)
+			if err != nil {
+				return err
+			}
 			row := goqu.Record{
-				"id":    dbResource.User.Id,
-				"name":  dbResource.User.Name,
-				"email": dbResource.User.Email,
+				"id":      dbResource.User.Id,
+				"name":    dbResource.User.Name,
+				"email":   dbResource.User.Email,
+				"enabled": dbResource.User.Enabled,
+				"attrs":   attrs,
 			}
 			baseUserQ := c.db.Insert(users.Name()).Prepared(true)
 			baseUserQ = baseUserQ.Rows(row)
@@ -272,7 +336,7 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email").
+	q = q.Select("id", "name", "email", "enabled", "attrs").
 		Order(goqu.C("id").Asc()).
 		Limit(uint(limit)).  //nolint:gosec // This won't underflow
 		Offset(uint(offset)) //nolint:gosec // This won't underflow
@@ -290,9 +354,18 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	usersList := []*User{}
 	for rows.Next() {
 		user := &User{}
-		err = rows.Scan(&user.Id, &user.Name, &user.Email)
+		attrsBytes := []byte{}
+		err = rows.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes)
 		if err != nil {
 			return nil, "", err
+		}
+		if len(attrsBytes) > 0 {
+			err = json.Unmarshal(attrsBytes, &user.Attrs)
+			if err != nil {
+				return nil, "", err
+			}
+		} else {
+			user.Attrs = make(map[string]string)
 		}
 		usersList = append(usersList, user)
 	}
@@ -313,7 +386,7 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email")
+	q = q.Select("id", "name", "email", "enabled", "attrs")
 	q = q.Where(goqu.C("id").Eq(userID))
 
 	query, args, err := q.ToSQL()
@@ -323,9 +396,19 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 
 	row := c.db.QueryRowContext(ctx, query, args...)
 	user := &User{}
-	err = row.Scan(&user.Id, &user.Name, &user.Email)
+	attrsBytes := []byte{}
+	err = row.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(attrsBytes) > 0 {
+		err = json.Unmarshal(attrsBytes, &user.Attrs)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		user.Attrs = make(map[string]string)
 	}
 
 	return user, nil
@@ -367,16 +450,25 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 	}
 
 	user := &User{
-		Id:    ksuid.New().String(),
-		Name:  name,
-		Email: email,
+		Id:      ksuid.New().String(),
+		Name:    name,
+		Email:   email,
+		Enabled: true, // Default to enabled
+		Attrs:   make(map[string]string),
+	}
+
+	attrs, err := json.Marshal(user.Attrs)
+	if err != nil {
+		return nil, err
 	}
 
 	q := c.db.Insert(users.Name()).Prepared(true)
 	q = q.Rows(goqu.Record{
-		"id":    user.Id,
-		"name":  user.Name,
-		"email": user.Email,
+		"id":      user.Id,
+		"name":    user.Name,
+		"email":   user.Email,
+		"enabled": user.Enabled,
+		"attrs":   attrs,
 	})
 
 	query, args, err := q.ToSQL()
@@ -405,6 +497,39 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 		return nil, err
 	}
 	return user, nil
+}
+
+func (c *Client) UpdateUser(ctx context.Context, user *User) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	attrs, err := json.Marshal(user.Attrs)
+	if err != nil {
+		return err
+	}
+
+	q := c.db.Update(users.Name()).Prepared(true)
+	q = q.Set(goqu.Record{
+		"name":    user.Name,
+		"email":   user.Email,
+		"enabled": user.Enabled,
+		"attrs":   attrs,
+	})
+	q = q.Where(goqu.C("id").Eq(user.Id))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *Client) ChangePassword(ctx context.Context, userID, password string) error {
