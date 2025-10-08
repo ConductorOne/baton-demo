@@ -61,3 +61,10 @@ jobs:
           baton-entitlement: 'group:group-0000001:member'
           baton-principal: 'user-0000000'
           baton-principal-type: 'user'
+      - name: Test account creation
+        uses: ConductorOne/github-workflows/actions/account-provisioning@v3
+        with:
+          connector: ./baton-demo
+          account-email: testuser1@example.com
+          account-login: testuser1
+          account-profile: '{"username": "testuser1", "email": "testuser1@example.com", "firstName": "test", "lastName": "user1"}'
