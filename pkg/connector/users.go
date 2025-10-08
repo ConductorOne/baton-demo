@@ -2,6 +2,8 @@ package connector
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -185,7 +187,10 @@ func (o *userBuilder) CreateAccount(
 	}
 	l.Info("Creating user", zap.String("user_id", accountInfo.Login), zap.String("password", plainTextPassword))
 
-	createdUser, err := o.client.CreateUser(ctx, accountInfo.Login, accountInfo.Emails[0].String(), plainTextPassword)
+	if len(accountInfo.Emails) == 0 {
+		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no email provided")
+	}
+	createdUser, err := o.client.CreateUser(ctx, accountInfo.Login, accountInfo.Emails[0].Address, plainTextPassword)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -209,12 +214,16 @@ func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId) (an
 		return nil, fmt.Errorf("baton-demo: non-user resource passed to role delete")
 	}
 
-	pgRole, err := o.client.GetUser(ctx, resourceId.Resource)
+	user, err := o.client.GetUser(ctx, resourceId.Resource)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// User already deleted.
+			return nil, nil
+		}
 		return nil, err
 	}
 
-	err = o.client.DeleteUser(ctx, pgRole.Name)
+	err = o.client.DeleteUser(ctx, user.Id)
 	return nil, err
 }
 
