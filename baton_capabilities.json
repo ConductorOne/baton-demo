@@ -1,58 +1,58 @@
 {
-  "@type": "type.googleapis.com/c1.connector.v2.ConnectorCapabilities",
-  "resourceTypeCapabilities": [
+  "@type":  "type.googleapis.com/c1.connector.v2.ConnectorCapabilities",
+  "resourceTypeCapabilities":  [
     {
-      "resourceType": {
-        "id": "group",
-        "displayName": "Group",
-        "traits": [
+      "resourceType":  {
+        "id":  "group",
+        "displayName":  "Group",
+        "traits":  [
           "TRAIT_GROUP"
         ]
       },
-      "capabilities": [
+      "capabilities":  [
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION"
       ]
     },
     {
-      "resourceType": {
-        "id": "project",
-        "displayName": "Project"
+      "resourceType":  {
+        "id":  "project",
+        "displayName":  "Project"
       },
-      "capabilities": [
+      "capabilities":  [
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC"
       ]
     },
     {
-      "resourceType": {
-        "id": "role",
-        "displayName": "Role",
-        "traits": [
+      "resourceType":  {
+        "id":  "role",
+        "displayName":  "Role",
+        "traits":  [
           "TRAIT_ROLE"
         ]
       },
-      "capabilities": [
+      "capabilities":  [
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION"
       ]
     },
     {
-      "resourceType": {
-        "id": "user",
-        "displayName": "User",
-        "traits": [
+      "resourceType":  {
+        "id":  "user",
+        "displayName":  "User",
+        "traits":  [
           "TRAIT_USER"
         ],
-        "annotations": [
+        "annotations":  [
           {
-            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+            "@type":  "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
           }
         ]
       },
-      "capabilities": [
+      "capabilities":  [
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION",
@@ -63,7 +63,7 @@
       ]
     }
   ],
-  "connectorCapabilities": [
+  "connectorCapabilities":  [
     "CAPABILITY_PROVISION",
     "CAPABILITY_SYNC",
     "CAPABILITY_ACCOUNT_PROVISIONING",
@@ -73,22 +73,22 @@
     "CAPABILITY_ACTIONS",
     "CAPABILITY_TARGETED_SYNC"
   ],
-  "credentialDetails": {
-    "capabilityAccountProvisioning": {
-      "supportedCredentialOptions": [
+  "credentialDetails":  {
+    "capabilityAccountProvisioning":  {
+      "supportedCredentialOptions":  [
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD",
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD",
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD"
       ],
-      "preferredCredentialOption": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
+      "preferredCredentialOption":  "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
     },
-    "capabilityCredentialRotation": {
-      "supportedCredentialOptions": [
+    "capabilityCredentialRotation":  {
+      "supportedCredentialOptions":  [
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD",
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD",
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD"
       ],
-      "preferredCredentialOption": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
+      "preferredCredentialOption":  "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
     }
   }
 }
