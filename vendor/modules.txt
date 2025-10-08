@@ -159,7 +159,7 @@ github.com/benbjohnson/clock
 # github.com/cenkalti/backoff/v4 v4.3.0
 ## explicit; go 1.18
 github.com/cenkalti/backoff/v4
-# github.com/conductorone/baton-sdk v0.4.5
+# github.com/conductorone/baton-sdk v0.4.8
 ## explicit; go 1.25
 github.com/conductorone/baton-sdk/internal/connector
 github.com/conductorone/baton-sdk/pb/c1/c1z/v1
@@ -249,6 +249,12 @@ github.com/doug-martin/goqu/v9/sqlgen
 # github.com/dustin/go-humanize v1.0.1
 ## explicit; go 1.16
 github.com/dustin/go-humanize
+# github.com/ebitengine/purego v0.8.4
+## explicit; go 1.18
+github.com/ebitengine/purego
+github.com/ebitengine/purego/internal/cgo
+github.com/ebitengine/purego/internal/fakecgo
+github.com/ebitengine/purego/internal/strings
 # github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 ## explicit; go 1.23
 github.com/ennyjfrick/ruleguard-logfatal
@@ -397,18 +403,15 @@ github.com/sagikazarmark/slog-shim
 # github.com/segmentio/ksuid v1.0.4
 ## explicit; go 1.12
 github.com/segmentio/ksuid
-# github.com/shirou/gopsutil/v3 v3.24.5
-## explicit; go 1.18
-github.com/shirou/gopsutil/v3/common
-github.com/shirou/gopsutil/v3/cpu
-github.com/shirou/gopsutil/v3/host
-github.com/shirou/gopsutil/v3/internal/common
-github.com/shirou/gopsutil/v3/mem
-github.com/shirou/gopsutil/v3/net
-github.com/shirou/gopsutil/v3/process
-# github.com/shoenig/go-m1cpu v0.1.6
-## explicit; go 1.20
-github.com/shoenig/go-m1cpu
+# github.com/shirou/gopsutil/v4 v4.25.8
+## explicit; go 1.23.0
+github.com/shirou/gopsutil/v4/common
+github.com/shirou/gopsutil/v4/cpu
+github.com/shirou/gopsutil/v4/host
+github.com/shirou/gopsutil/v4/internal/common
+github.com/shirou/gopsutil/v4/mem
+github.com/shirou/gopsutil/v4/net
+github.com/shirou/gopsutil/v4/process
 # github.com/sourcegraph/conc v0.3.0
 ## explicit; go 1.19
 github.com/sourcegraph/conc
@@ -444,11 +447,11 @@ github.com/spf13/viper/internal/features
 # github.com/subosito/gotenv v1.6.0
 ## explicit; go 1.18
 github.com/subosito/gotenv
-# github.com/tklauser/go-sysconf v0.3.14
-## explicit; go 1.18
+# github.com/tklauser/go-sysconf v0.3.15
+## explicit; go 1.23.0
 github.com/tklauser/go-sysconf
-# github.com/tklauser/numcpus v0.9.0
-## explicit; go 1.18
+# github.com/tklauser/numcpus v0.10.0
+## explicit; go 1.23.0
 github.com/tklauser/numcpus
 # github.com/yusufpapurcu/wmi v1.2.4
 ## explicit; go 1.16
@@ -589,7 +592,7 @@ golang.org/x/oauth2/jwt
 ## explicit; go 1.23.0
 golang.org/x/sync/semaphore
 golang.org/x/sync/singleflight
-# golang.org/x/sys v0.31.0
+# golang.org/x/sys v0.35.0
 ## explicit; go 1.23.0
 golang.org/x/sys/cpu
 golang.org/x/sys/plan9
