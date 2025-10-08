@@ -6,22 +6,22 @@ import (
 
 var (
 	GroupCountField = field.IntField("groups",
-		field.WithDescription("Numeber of groups to create."),
+		field.WithDescription("Number of groups to create."),
 		field.WithDefaultValue(3),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
 	ProjectCountField = field.IntField("projects",
-		field.WithDescription("Numeber of projects to create."),
+		field.WithDescription("Number of projects to create."),
 		field.WithDefaultValue(3),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
 	RoleCountField = field.IntField("roles",
-		field.WithDescription("Numeber of roles to create."),
+		field.WithDescription("Number of roles to create."),
 		field.WithDefaultValue(3),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
 	UserCountField = field.IntField("users",
-		field.WithDescription("Numeber of users to create."),
+		field.WithDescription("Number of users to create."),
 		field.WithDefaultValue(10),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
