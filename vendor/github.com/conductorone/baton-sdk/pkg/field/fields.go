@@ -74,6 +74,9 @@ type SchemaField struct {
 	ConnectorConfig connectorConfig
 
 	WasReExported bool
+
+	// Groups
+	FieldGroups []SchemaFieldGroup
 }
 
 type SchemaTypes interface {
@@ -204,6 +207,27 @@ func StringField(name string, optional ...fieldOption) SchemaField {
 		Rules:           FieldRule{},
 		SyncerConfig:    syncerConfig{},
 		ConnectorConfig: connectorConfig{FieldType: Text},
+	}
+
+	for _, o := range optional {
+		field = o(field)
+	}
+
+	return field
+}
+
+func FileUploadField(name string, bonusStrings []string, optional ...fieldOption) SchemaField {
+	field := SchemaField{
+		FieldName:    name,
+		Variant:      StringVariant,
+		DefaultValue: "",
+		ExportTarget: ExportTargetGUI,
+		Rules:        FieldRule{},
+		SyncerConfig: syncerConfig{},
+		ConnectorConfig: connectorConfig{
+			FieldType:    FileUpload,
+			BonusStrings: bonusStrings,
+		},
 	}
 
 	for _, o := range optional {
