@@ -25,8 +25,9 @@ var (
 		field.WithDefaultValue(10),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
-	InitDB     = field.BoolField("init-db", field.WithDescription("Whether to initialize the database."), field.WithDefaultValue(false))
-	DbFileName = field.StringField("db-file-name", field.WithDescription("The name of the database file."), field.WithDefaultValue("baton-demo.db"))
+	InitDB          = field.BoolField("init-db", field.WithDescription("Whether to initialize the database."), field.WithDefaultValue(false))
+	DbFileName      = field.StringField("db-file-name", field.WithDescription("The name of the database file."), field.WithDefaultValue("baton-demo.db"))
+	DropProbability = field.IntField("drop-probability", field.WithDescription("The probability we should drop any given value from a sync, int from 0 - 100"), field.WithDefaultValue(0))
 )
 
 var relationships = []field.SchemaFieldRelationship{}
@@ -39,4 +40,5 @@ var Config = field.NewConfiguration([]field.SchemaField{
 	UserCountField,
 	InitDB,
 	DbFileName,
+	DropProbability,
 }, field.WithConstraints(relationships...))

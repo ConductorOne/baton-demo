@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"slices"
 	"strconv"
@@ -70,14 +71,16 @@ type Password struct {
 // Client is a simple example client. While this client would normally be responsible for communicating with an upstream.
 // API, for this demo the client is only working with in-memory data.
 type Client struct {
-	db     *goqu.Database
-	rawDB  *sql.DB
-	config *config.Demo
+	db              *goqu.Database
+	rawDB           *sql.DB
+	config          *config.Demo
+	dropProbability int
 }
 
 func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 	c := &Client{
-		config: dc,
+		config:          dc,
+		dropProbability: dc.DropProbability,
 	}
 
 	// Open the database file
@@ -122,6 +125,10 @@ func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 	}
 
 	return c, nil
+}
+
+func (c *Client) ShouldDrop() bool {
+	return rand.Intn(101) < c.dropProbability
 }
 
 func (c *Client) Close() error {

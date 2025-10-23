@@ -82,7 +82,9 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 			return nil, "", nil, err
 		}
 
-		ret = append(ret, userResource)
+		if !o.client.ShouldDrop() {
+			ret = append(ret, userResource)
+		}
 	}
 
 	return ret, nextPageToken, nil, nil

@@ -54,7 +54,9 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 		if err != nil {
 			return nil, "", nil, err
 		}
-		ret = append(ret, role)
+		if !o.client.ShouldDrop() {
+			ret = append(ret, role)
+		}
 	}
 
 	return ret, "", nil, nil

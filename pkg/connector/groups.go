@@ -59,7 +59,9 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		if err != nil {
 			return nil, "", nil, err
 		}
-		ret = append(ret, group)
+		if !o.client.ShouldDrop() {
+			ret = append(ret, group)
+		}
 	}
 
 	return ret, "", nil, nil

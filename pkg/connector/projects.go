@@ -45,7 +45,9 @@ func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.Resource
 		if err != nil {
 			return nil, "", nil, err
 		}
-		ret = append(ret, project)
+		if !o.client.ShouldDrop() {
+			ret = append(ret, project)
+		}
 	}
 
 	return ret, "", nil, nil
