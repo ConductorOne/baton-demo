@@ -25,11 +25,11 @@ var (
 		field.WithDefaultValue(10),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
-	InitDB               = field.BoolField("init-db", field.WithDescription("Whether to initialize the database."), field.WithDefaultValue(false))
-	DbFileName           = field.StringField("db-file-name", field.WithDescription("The name of the database file."), field.WithDefaultValue("baton-demo.db"))
-	DropProbability      = field.IntField("drop-probability", field.WithDescription("The probability we should drop any given value from a sync, int from 0 - 100"), field.WithDefaultValue(0))
-	RTDropProbability    = field.IntField("resource-type-drop-probability", field.WithDescription("The probability we should drop any whole resource type from the sync, int from 0 - 100"), field.WithDefaultValue(0))
-	GrantDropProbability = field.IntField("grant-drop-probability", field.WithDescription("The probability we should drop any grant from the sync, int from 0 - 100"), field.WithDefaultValue(0))
+	InitDB                  = field.BoolField("init-db", field.WithDescription("Whether to initialize the database."), field.WithDefaultValue(false))
+	DbFileName              = field.StringField("db-file-name", field.WithDescription("The name of the database file."), field.WithDefaultValue("baton-demo.db"))
+	ResourceDropProbability = field.IntField("resource-drop-probability", field.WithDescription("The probability we should drop any given resource from a sync, int from 0 - 100"), field.WithDefaultValue(0))
+	RTDropProbability       = field.IntField("resource-type-drop-probability", field.WithDescription("The probability we should drop any whole resource type from the sync, int from 0 - 100"), field.WithDefaultValue(0))
+	GrantDropProbability    = field.IntField("grant-drop-probability", field.WithDescription("The probability we should drop any grant from the sync, int from 0 - 100"), field.WithDefaultValue(0))
 )
 
 var relationships = []field.SchemaFieldRelationship{}
@@ -42,7 +42,7 @@ var Config = field.NewConfiguration([]field.SchemaField{
 	UserCountField,
 	InitDB,
 	DbFileName,
-	DropProbability,
+	ResourceDropProbability,
 	RTDropProbability,
 	GrantDropProbability,
 }, field.WithConstraints(relationships...))

@@ -82,7 +82,7 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 			return nil, "", nil, err
 		}
 
-		if !o.client.ShouldDrop() {
+		if !o.client.ShouldDropResource() {
 			ret = append(ret, userResource)
 		}
 	}
