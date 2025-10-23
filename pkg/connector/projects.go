@@ -107,8 +107,7 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 	if err != nil {
 		return nil, "", nil, err
 	}
-
-	if project.Owner != "" && offset == 0 {
+	if project.Owner != "" && offset == 0 && !o.client.ShouldDropGrant() {
 		ret = append(ret, sdkGrant.NewGrant(resource, projectOwnerEntitlement, ownerID))
 		// Owners also receive the access entitlement
 		ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, ownerID))
@@ -130,7 +129,9 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 			grant := sdkGrant.NewGrant(resource, projectAccessEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
 				EntitlementIds: entitlementIDs,
 			}))
-			ret = append(ret, grant)
+			if !o.client.ShouldDropGrant() {
+				ret = append(ret, grant)
+			}
 		}
 	}
 

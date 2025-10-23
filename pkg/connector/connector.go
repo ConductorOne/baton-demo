@@ -17,12 +17,22 @@ type Demo struct {
 
 // ResourceSyncers returns a ResourceSyncer for each resource type that should be synced from the upstream service.
 func (d *Demo) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
-	return []connectorbuilder.ResourceSyncer{
+	returnTypes := make([]connectorbuilder.ResourceSyncer, 0)
+	for _, resourceType := range []connectorbuilder.ResourceSyncer{
 		newUserBuilder(d.client),
 		newGroupBuilder(d.client),
 		newRoleBuilder(d.client),
 		newProjectBuilder(d.client),
+	} {
+		if !d.client.ShouldDropRT() {
+			returnTypes = append(returnTypes, resourceType)
+		}
 	}
+	// SYNC hard fails if there are no types at all
+	if len(returnTypes) == 0 {
+		returnTypes = append(returnTypes, newUserBuilder(d.client))
+	}
+	return returnTypes
 }
 
 // Asset takes an input AssetRef and attempts to fetch it using the connector's authenticated http client

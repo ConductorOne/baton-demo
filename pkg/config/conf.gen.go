@@ -11,6 +11,8 @@ type Demo struct {
 	InitDb bool `mapstructure:"init-db"`
 	DbFileName string `mapstructure:"db-file-name"`
 	DropProbability int `mapstructure:"drop-probability"`
+	ResourceTypeDropProbability int `mapstructure:"resource-type-drop-probability"`
+	GrantDropProbability int `mapstructure:"grant-drop-probability"`
 }
 
 func (c* Demo) findFieldByTag(tagValue string) (any, bool) {

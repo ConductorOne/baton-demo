@@ -131,6 +131,13 @@ func (c *Client) ShouldDrop() bool {
 	return rand.Intn(101) < c.dropProbability
 }
 
+func (c *Client) ShouldDropRT() bool {
+	return rand.Intn(101) < c.config.ResourceTypeDropProbability
+}
+
+func (c *Client) ShouldDropGrant() bool {
+	return rand.Intn(101) < c.config.GrantDropProbability
+}
 func (c *Client) Close() error {
 	return c.rawDB.Close()
 }
