@@ -31,22 +31,22 @@ var (
 		"resource-drop-probability",
 		field.WithDescription("The probability we should drop any given resource from a sync, int from 0 - 100"),
 		field.WithDefaultValue(0),
-		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
-		field.WithInt(func(r *field.IntRuler) { r.Lt(101) }),
+		field.WithInt(func(r *field.IntRuler) { r.Gte(0) }),
+		field.WithInt(func(r *field.IntRuler) { r.Lte(100) }),
 	)
 	RTDropProbability = field.IntField(
 		"resource-type-drop-probability",
 		field.WithDescription("The probability we should drop any whole resource type from the sync, int from 0 - 100"),
 		field.WithDefaultValue(0),
-		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
-		field.WithInt(func(r *field.IntRuler) { r.Lt(101) }),
+		field.WithInt(func(r *field.IntRuler) { r.Gte(0) }),
+		field.WithInt(func(r *field.IntRuler) { r.Lte(100) }),
 	)
 	GrantDropProbability = field.IntField(
 		"grant-drop-probability",
 		field.WithDescription("The probability we should drop any grant from the sync, int from 0 - 100"),
 		field.WithDefaultValue(0),
-		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
-		field.WithInt(func(r *field.IntRuler) { r.Lt(101) }),
+		field.WithInt(func(r *field.IntRuler) { r.Gte(0) }),
+		field.WithInt(func(r *field.IntRuler) { r.Lte(100) }),
 	)
 )
 
