@@ -3,61 +3,92 @@ package session
 import (
 	"context"
 	"fmt"
+	"iter"
+	"maps"
 
-	"github.com/conductorone/baton-sdk/pkg/types"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 )
 
-// KeyPrefixDelimiter is the delimiter used to separate prefixes from keys in the session cache.
-const KeyPrefixDelimiter = "::"
+const MaxKeysPerRequest = 100
 
-// GetSession retrieves the session cache instance from the context.
-// Returns an error if no session cache is found in the context.
-func GetSession(ctx context.Context) (types.SessionCache, error) {
-	if sessionCache, ok := ctx.Value(types.SessionCacheKey{}).(types.SessionCache); ok {
-		return sessionCache, nil
-	}
-	return nil, fmt.Errorf("no session cache found in context")
-}
-
-func WithSyncID(syncID string) types.SessionCacheOption {
-	return func(ctx context.Context, bag *types.SessionCacheBag) error {
-		bag.SyncID = syncID
-		return nil
+func Chunk[T any](items []T, chunkSize int) iter.Seq[[]T] {
+	return func(yield func([]T) bool) {
+		for i := 0; i < len(items); i += chunkSize {
+			end := min(i+chunkSize, len(items))
+			if !yield(items[i:end]) {
+				return
+			}
+		}
 	}
 }
 
-func WithPrefix(prefix string) types.SessionCacheOption {
-	return func(ctx context.Context, bag *types.SessionCacheBag) error {
-		bag.Prefix = prefix
-		return nil
-	}
+type GetManyable[T any] interface {
+	GetMany(ctx context.Context, keys []string, opt ...sessions.SessionStoreOption) (map[string]T, error)
 }
 
-// GetSyncIDFromContext retrieves the sync ID from the context, returning empty string if not found.
-func GetSyncIDFromContext(ctx context.Context) string {
-	if syncID, ok := ctx.Value(types.SyncIDKey{}).(string); ok {
-		return syncID
-	}
-	return ""
-}
-
-// applyOptions applies session cache options and returns a configured bag.
-func applyOptions(ctx context.Context, opt ...types.SessionCacheOption) (*types.SessionCacheBag, error) {
-	bag := &types.SessionCacheBag{}
-
-	for _, option := range opt {
-		err := option(ctx, bag)
+func UnrollGetMany[T any](ctx context.Context, ss GetManyable[T], keys []string, opt ...sessions.SessionStoreOption) (map[string]T, error) {
+	all := make(map[string]T)
+	// TODO(Kans): parallelize this?
+	for keys := range Chunk(keys, MaxKeysPerRequest) {
+		some, err := ss.GetMany(ctx, keys, opt...)
 		if err != nil {
 			return nil, err
 		}
+		maps.Copy(all, some)
+	}
+	return all, nil
+}
+
+type SetManyable[T any] interface {
+	SetMany(ctx context.Context, values map[string]T, opt ...sessions.SessionStoreOption) error
+}
+
+func UnrollSetMany[T any](ctx context.Context, ss SetManyable[T], items map[string]T, opt ...sessions.SessionStoreOption) error {
+	if len(items) <= MaxKeysPerRequest {
+		return ss.SetMany(ctx, items, opt...)
 	}
 
-	if bag.SyncID == "" {
-		bag.SyncID = GetSyncIDFromContext(ctx)
-	}
-	if bag.SyncID == "" {
-		return nil, fmt.Errorf("no syncID set on context or in options")
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
 	}
 
-	return bag, nil
+	// TODO(Kans): parallelize this?
+	for keyChunk := range Chunk(keys, MaxKeysPerRequest) {
+		some := make(map[string]T)
+		for _, key := range keyChunk {
+			some[key] = items[key]
+		}
+		err := ss.SetMany(ctx, some, opt...)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type GetAllable[T any] interface {
+	GetAll(ctx context.Context, pageToken string, opt ...sessions.SessionStoreOption) (map[string]T, string, error)
+}
+
+func UnrollGetAll[T any](ctx context.Context, ss GetAllable[T], opt ...sessions.SessionStoreOption) (map[string]T, error) {
+	pageToken := ""
+	all := make(map[string]T)
+	for {
+		// TODO(Kans): parallelize this?
+		some, nextPageToken, err := ss.GetAll(ctx, pageToken, opt...)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(all, some)
+		if nextPageToken == "" {
+			break
+		}
+		if pageToken == nextPageToken {
+			return nil, fmt.Errorf("page token is the same as the next page token: %s", pageToken)
+		}
+
+		pageToken = nextPageToken
+	}
+	return all, nil
 }
