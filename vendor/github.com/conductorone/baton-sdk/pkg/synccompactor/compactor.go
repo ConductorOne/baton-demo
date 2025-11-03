@@ -128,6 +128,7 @@ func (c *Compactor) Compact(ctx context.Context) (*CompactableSync, error) {
 		ctx,
 		emptyConnector,
 		sync.WithC1ZPath(applied.FilePath),
+		sync.WithTmpDir(c.tmpDir),
 		sync.WithSyncID(applied.SyncID),
 		sync.WithOnlyExpandGrants(),
 	)
@@ -203,15 +204,15 @@ func (c *Compactor) getLatestObjects(ctx context.Context, info *CompactableSync)
 		_ = baseC1Z.Close(ctx)
 	}
 
-	latestAppliedSync, err := baseFile.GetSync(ctx, &reader_v2.SyncsReaderServiceGetSyncRequest{
+	latestAppliedSync, err := baseFile.GetSync(ctx, reader_v2.SyncsReaderServiceGetSyncRequest_builder{
 		SyncId:      info.SyncID,
 		Annotations: nil,
-	})
+	}.Build())
 	if err != nil {
 		return nil, nil, nil, cleanup, err
 	}
 
-	return latestAppliedSync.Sync, baseFile, baseC1Z, cleanup, nil
+	return latestAppliedSync.GetSync(), baseFile, baseC1Z, cleanup, nil
 }
 
 func unionSyncTypes(a, b connectorstore.SyncType) connectorstore.SyncType {
@@ -263,7 +264,7 @@ func (c *Compactor) doOneCompaction(ctx context.Context, base *CompactableSync, 
 		return nil, err
 	}
 
-	syncType := unionSyncTypes(connectorstore.SyncType(baseSync.SyncType), connectorstore.SyncType(appliedSync.SyncType))
+	syncType := unionSyncTypes(connectorstore.SyncType(baseSync.GetSyncType()), connectorstore.SyncType(appliedSync.GetSyncType()))
 
 	newSyncId, err := newFile.StartNewSync(ctx, syncType, "")
 	if err != nil {

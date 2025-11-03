@@ -1,9 +1,9 @@
 module github.com/conductorone/baton-demo
 
-go 1.25
+go 1.25.2
 
 require (
-	github.com/conductorone/baton-sdk v0.4.8
+	github.com/conductorone/baton-sdk v0.5.6
 	github.com/doug-martin/goqu/v9 v9.19.0
 	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
@@ -45,12 +45,10 @@ require (
 	github.com/conductorone/dpop/integrations/dpop_grpc v0.2.3 // indirect
 	github.com/conductorone/dpop/integrations/dpop_oauth2 v0.2.3 // indirect
 	github.com/deckarep/golang-set/v2 v2.7.0 // indirect
-	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
-	github.com/gammazero/deque v1.0.0 // indirect
 	github.com/glebarez/go-sqlite v1.22.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.0.5 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
@@ -66,7 +64,7 @@ require (
 	github.com/lufia/plan9stats v0.0.0-20240909124753-873cd0166683 // indirect
 	github.com/magiconair/properties v1.8.9 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/maypok86/otter v1.2.4 // indirect
+	github.com/maypok86/otter/v2 v2.2.1 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
@@ -108,7 +106,7 @@ require (
 	golang.org/x/net v0.36.0 // indirect
 	golang.org/x/oauth2 v0.28.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/term v0.30.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250218202821-56aae31c358a // indirect

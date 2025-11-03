@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -22,13 +24,15 @@ import (
 	"github.com/conductorone/baton-sdk/internal/connector"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	v1 "github.com/conductorone/baton-sdk/pb/c1/connector_wrapper/v1"
+	baton_v1 "github.com/conductorone/baton-sdk/pb/c1/connectorapi/baton/v1"
 	"github.com/conductorone/baton-sdk/pkg/connectorrunner"
 	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/conductorone/baton-sdk/pkg/logging"
 	"github.com/conductorone/baton-sdk/pkg/session"
-	"github.com/conductorone/baton-sdk/pkg/types"
+	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uotel"
+	utls2 "github.com/conductorone/baton-sdk/pkg/utls"
 )
 
 const (
@@ -37,9 +41,53 @@ const (
 
 type ContrainstSetter func(*cobra.Command, field.Configuration) error
 
-// defaultSessionCacheConstructor creates a default in-memory session cache.
-func defaultSessionCacheConstructor(ctx context.Context, opt ...types.SessionCacheConstructorOption) (types.SessionCache, error) {
-	return session.NewMemorySessionCache(ctx, opt...)
+// In one shot & service mode, the child process uses this client to connect to the session store server...
+//
+//	which uses the C1Z for storage.  Unfortunately the C1Z is instantiated well after we fork the child process,
+//	so there is quite a bit of pass through.
+func getGRPCSessionStoreClient(ctx context.Context, serverCfg *v1.ServerConfig) func(ctx context.Context, opt ...sessions.SessionStoreConstructorOption) (sessions.SessionStore, error) {
+	return func(_ context.Context, opt ...sessions.SessionStoreConstructorOption) (sessions.SessionStore, error) {
+		l := ctxzap.Extract(ctx)
+		clientTLSConfig, err := utls2.ClientConfig(ctx, serverCfg.GetCredential())
+		if err != nil {
+			return nil, err
+		}
+
+		// connected, grpc will handle retries for us.
+		dialCtx, canc := context.WithTimeout(ctx, 5*time.Second)
+		defer canc()
+		var dialErr error
+		var conn *grpc.ClientConn
+		for {
+			conn, err = grpc.DialContext( //nolint:staticcheck // grpc.DialContext is deprecated but we are using it still.
+				ctx,
+				fmt.Sprintf("127.0.0.1:%d", serverCfg.GetSessionStoreListenPort()),
+				grpc.WithTransportCredentials(credentials.NewTLS(clientTLSConfig)),
+				grpc.WithBlock(), //nolint:staticcheck // grpc.WithBlock is deprecated but we are using it still.
+			)
+			if err != nil {
+				dialErr = err
+				select {
+				case <-time.After(time.Millisecond * 500):
+				case <-dialCtx.Done():
+					return nil, dialErr
+				}
+				continue
+			}
+			break
+		}
+
+		client := baton_v1.NewBatonSessionServiceClient(conn)
+		ss, err := session.NewGRPCSessionStore(ctx, client, opt...)
+		if err != nil {
+			err2 := conn.Close()
+			if err2 != nil {
+				l.Error("error closing connection", zap.Error(err2))
+			}
+			return nil, err
+		}
+		return ss, nil
+	}
 }
 
 func MakeMainCommand[T field.Configurable](
@@ -47,7 +95,7 @@ func MakeMainCommand[T field.Configurable](
 	name string,
 	v *viper.Viper,
 	confschema field.Configuration,
-	getconnector GetConnectorFunc[T],
+	getconnector GetConnectorFunc2[T],
 	opts ...connectorrunner.Option,
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
@@ -98,8 +146,14 @@ func MakeMainCommand[T field.Configurable](
 			}
 		}
 
+		readFromPath := true
+		decodeOpts := field.WithAdditionalDecodeHooks(field.FileUploadDecodeHook(readFromPath))
+		t, err := MakeGenericConfiguration[T](v, decodeOpts)
+		if err != nil {
+			return fmt.Errorf("failed to make configuration: %w", err)
+		}
 		// validate required fields and relationship constraints
-		if err := field.Validate(confschema, v); err != nil {
+		if err := field.Validate(confschema, t, field.WithAuthMethod(v.GetString("auth-method"))); err != nil {
 			return err
 		}
 
@@ -140,7 +194,7 @@ func MakeMainCommand[T field.Configurable](
 						v.GetString("revoke-grant"),
 					))
 			case v.GetBool("event-feed"):
-				opts = append(opts, connectorrunner.WithOnDemandEventStream(v.GetString("event-feed-id"), v.GetTime("event-feed-start-at")))
+				opts = append(opts, connectorrunner.WithOnDemandEventStream(v.GetString("event-feed-id"), v.GetTime("event-feed-start-at"), v.GetString("event-feed-cursor")))
 			case v.GetString("create-account-profile") != "":
 				profileMap := v.GetStringMap("create-account-profile")
 				if profileMap == nil {
@@ -248,11 +302,6 @@ func MakeMainCommand[T field.Configurable](
 				opts = append(opts,
 					connectorrunner.WithTicketingEnabled(),
 					connectorrunner.WithGetTicket(v.GetString("ticket-id")))
-			case len(v.GetStringSlice("sync-resources")) > 0:
-				opts = append(opts,
-					connectorrunner.WithTargetedSyncResourceIDs(v.GetStringSlice("sync-resources")),
-					connectorrunner.WithOnDemandSync(v.GetString("file")),
-				)
 			case v.GetBool("diff-syncs"):
 				opts = append(opts,
 					connectorrunner.WithDiffSyncs(
@@ -269,8 +318,15 @@ func MakeMainCommand[T field.Configurable](
 						v.GetStringSlice("compact-sync-ids"),
 					),
 				)
-
 			default:
+				if len(v.GetStringSlice("sync-resources")) > 0 {
+					opts = append(opts,
+						connectorrunner.WithTargetedSyncResourceIDs(v.GetStringSlice("sync-resources")))
+				}
+				if len(v.GetStringSlice("sync-resource-types")) > 0 {
+					opts = append(opts,
+						connectorrunner.WithSyncResourceTypeIDs(v.GetStringSlice("sync-resource-types")))
+				}
 				opts = append(opts, connectorrunner.WithOnDemandSync(v.GetString("file")))
 			}
 		}
@@ -298,19 +354,11 @@ func MakeMainCommand[T field.Configurable](
 		}
 
 		opts = append(opts, connectorrunner.WithSkipEntitlementsAndGrants(v.GetBool("skip-entitlements-and-grants")))
-
-		t, err := MakeGenericConfiguration[T](v)
-		if err != nil {
-			return fmt.Errorf("failed to make configuration: %w", err)
+		if v.GetBool("skip-grants") {
+			opts = append(opts, connectorrunner.WithSkipGrants(v.GetBool("skip-grants")))
 		}
 
-		// Create session cache and add to context
-		runCtx, err = WithSessionCache(runCtx, defaultSessionCacheConstructor)
-		if err != nil {
-			return fmt.Errorf("failed to create session cache: %w", err)
-		}
-
-		c, err := getconnector(runCtx, t)
+		c, err := getconnector(runCtx, t, RunTimeOpts{})
 		if err != nil {
 			return err
 		}
@@ -371,7 +419,7 @@ func MakeGRPCServerCommand[T field.Configurable](
 	name string,
 	v *viper.Viper,
 	confschema field.Configuration,
-	getconnector GetConnectorFunc[T],
+	getconnector GetConnectorFunc2[T],
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		// NOTE(shackra): bind all the flags (persistent and
@@ -412,76 +460,14 @@ func MakeGRPCServerCommand[T field.Configurable](
 		l := ctxzap.Extract(runCtx)
 		l.Debug("starting grpc server")
 
-		// validate required fields and relationship constraints
-		if err := field.Validate(confschema, v); err != nil {
-			return err
-		}
-		t, err := MakeGenericConfiguration[T](v)
+		readFromPath := true
+		decodeOpts := field.WithAdditionalDecodeHooks(field.FileUploadDecodeHook(readFromPath))
+		t, err := MakeGenericConfiguration[T](v, decodeOpts)
 		if err != nil {
 			return fmt.Errorf("failed to make configuration: %w", err)
 		}
-
-		// Create session cache and add to context
-		runCtx, err = WithSessionCache(runCtx, defaultSessionCacheConstructor)
-		if err != nil {
-			return fmt.Errorf("failed to create session cache: %w", err)
-		}
-
-		clientSecret := v.GetString("client-secret")
-		if clientSecret != "" {
-			secretJwk, err := crypto.ParseClientSecret([]byte(clientSecret), true)
-			if err != nil {
-				return err
-			}
-			runCtx = context.WithValue(runCtx, crypto.ContextClientSecretKey, secretJwk)
-		}
-
-		c, err := getconnector(runCtx, t)
-		if err != nil {
-			return err
-		}
-
-		var copts []connector.Option
-
-		if v.GetBool("provisioning") {
-			copts = append(copts, connector.WithProvisioningEnabled())
-		}
-
-		if v.GetBool("ticketing") {
-			copts = append(copts, connector.WithTicketingEnabled())
-		}
-
-		if v.GetBool("skip-full-sync") {
-			copts = append(copts, connector.WithFullSyncDisabled())
-		}
-
-		switch {
-		case v.GetString("grant-entitlement") != "":
-			copts = append(copts, connector.WithProvisioningEnabled())
-		case v.GetString("revoke-grant") != "":
-			copts = append(copts, connector.WithProvisioningEnabled())
-		case v.GetString("create-account-profile") != "":
-			copts = append(copts, connector.WithProvisioningEnabled())
-		case v.GetString("create-account-login") != "" || v.GetString("create-account-email") != "":
-			copts = append(copts, connector.WithProvisioningEnabled())
-		case v.GetString("delete-resource") != "" || v.GetString("delete-resource-type") != "":
-			copts = append(copts, connector.WithProvisioningEnabled())
-		case v.GetString("rotate-credentials") != "" || v.GetString("rotate-credentials-type") != "":
-			copts = append(copts, connector.WithProvisioningEnabled())
-		case v.GetBool("create-ticket"):
-			copts = append(copts, connector.WithTicketingEnabled())
-		case v.GetBool("bulk-create-ticket"):
-			copts = append(copts, connector.WithTicketingEnabled())
-		case v.GetBool("list-ticket-schemas"):
-			copts = append(copts, connector.WithTicketingEnabled())
-		case v.GetBool("get-ticket"):
-			copts = append(copts, connector.WithTicketingEnabled())
-		case len(v.GetStringSlice("sync-resources")) > 0:
-			copts = append(copts, connector.WithTargetedSyncResourceIDs(v.GetStringSlice("sync-resources")))
-		}
-
-		cw, err := connector.NewWrapper(runCtx, c, copts...)
-		if err != nil {
+		// validate required fields and relationship constraints
+		if err := field.Validate(confschema, t, field.WithAuthMethod(v.GetString("auth-method"))); err != nil {
 			return err
 		}
 
@@ -491,6 +477,7 @@ func MakeGRPCServerCommand[T field.Configurable](
 			cfgStr = scn.Text()
 			break
 		}
+
 		cfgBytes, err := base64.StdEncoding.DecodeString(cfgStr)
 		if err != nil {
 			return err
@@ -521,6 +508,71 @@ func MakeGRPCServerCommand[T field.Configurable](
 		if err != nil {
 			return err
 		}
+		clientSecret := v.GetString("client-secret")
+		if clientSecret != "" {
+			secretJwk, err := crypto.ParseClientSecret([]byte(clientSecret), true)
+			if err != nil {
+				return err
+			}
+			runCtx = context.WithValue(runCtx, crypto.ContextClientSecretKey, secretJwk)
+		}
+		sessionConstructor := getGRPCSessionStoreClient(runCtx, serverCfg)
+		c, err := getconnector(runCtx, t, RunTimeOpts{
+			SessionStore: &lazySessionStore{constructor: sessionConstructor},
+		})
+		if err != nil {
+			return err
+		}
+
+		var copts []connector.Option
+
+		if v.GetBool("provisioning") {
+			copts = append(copts, connector.WithProvisioningEnabled())
+		}
+
+		if v.GetBool("ticketing") {
+			copts = append(copts, connector.WithTicketingEnabled())
+		}
+
+		if v.GetBool("skip-full-sync") {
+			copts = append(copts, connector.WithFullSyncDisabled())
+		}
+
+		if len(v.GetStringSlice("sync-resources")) > 0 {
+			copts = append(copts, connector.WithTargetedSyncResourceIDs(v.GetStringSlice("sync-resources")))
+		}
+
+		if len(v.GetStringSlice("sync-resource-types")) > 0 {
+			copts = append(copts, connector.WithSyncResourceTypeIDs(v.GetStringSlice("sync-resource-types")))
+		}
+
+		switch {
+		case v.GetString("grant-entitlement") != "":
+			copts = append(copts, connector.WithProvisioningEnabled())
+		case v.GetString("revoke-grant") != "":
+			copts = append(copts, connector.WithProvisioningEnabled())
+		case v.GetString("create-account-profile") != "":
+			copts = append(copts, connector.WithProvisioningEnabled())
+		case v.GetString("create-account-login") != "" || v.GetString("create-account-email") != "":
+			copts = append(copts, connector.WithProvisioningEnabled())
+		case v.GetString("delete-resource") != "" || v.GetString("delete-resource-type") != "":
+			copts = append(copts, connector.WithProvisioningEnabled())
+		case v.GetString("rotate-credentials") != "" || v.GetString("rotate-credentials-type") != "":
+			copts = append(copts, connector.WithProvisioningEnabled())
+		case v.GetBool("create-ticket"):
+			copts = append(copts, connector.WithTicketingEnabled())
+		case v.GetBool("bulk-create-ticket"):
+			copts = append(copts, connector.WithTicketingEnabled())
+		case v.GetBool("list-ticket-schemas"):
+			copts = append(copts, connector.WithTicketingEnabled())
+		case v.GetBool("get-ticket"):
+			copts = append(copts, connector.WithTicketingEnabled())
+		}
+
+		cw, err := connector.NewWrapper(runCtx, c, copts...)
+		if err != nil {
+			return err
+		}
 
 		return cw.Run(runCtx, serverCfg)
 	}
@@ -531,7 +583,7 @@ func MakeCapabilitiesCommand[T field.Configurable](
 	name string,
 	v *viper.Viper,
 	confschema field.Configuration,
-	getconnector GetConnectorFunc[T],
+	getconnector GetConnectorFunc2[T],
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		// NOTE(shackra): bind all the flags (persistent and
@@ -553,22 +605,18 @@ func MakeCapabilitiesCommand[T field.Configurable](
 			return err
 		}
 
-		// validate required fields and relationship constraints
-		if err := field.Validate(confschema, v); err != nil {
-			return err
-		}
-		t, err := MakeGenericConfiguration[T](v)
+		readFromPath := true
+		decodeOpts := field.WithAdditionalDecodeHooks(field.FileUploadDecodeHook(readFromPath))
+		t, err := MakeGenericConfiguration[T](v, decodeOpts)
 		if err != nil {
 			return fmt.Errorf("failed to make configuration: %w", err)
 		}
-
-		// Create session cache and add to context
-		runCtx, err = WithSessionCache(runCtx, defaultSessionCacheConstructor)
-		if err != nil {
-			return fmt.Errorf("failed to create session cache: %w", err)
+		// validate required fields and relationship constraints
+		if err := field.Validate(confschema, t, field.WithAuthMethod(v.GetString("auth-method"))); err != nil {
+			return err
 		}
 
-		c, err := getconnector(runCtx, t)
+		c, err := getconnector(runCtx, t, RunTimeOpts{})
 		if err != nil {
 			return err
 		}
@@ -578,7 +626,7 @@ func MakeCapabilitiesCommand[T field.Configurable](
 			return err
 		}
 
-		if md.Metadata.Capabilities == nil {
+		if !md.GetMetadata().HasCapabilities() {
 			return fmt.Errorf("connector does not support capabilities")
 		}
 
@@ -588,7 +636,7 @@ func MakeCapabilitiesCommand[T field.Configurable](
 		}
 
 		a := &anypb.Any{}
-		err = anypb.MarshalFrom(a, md.Metadata.Capabilities, proto.MarshalOptions{Deterministic: true})
+		err = anypb.MarshalFrom(a, md.GetMetadata().GetCapabilities(), proto.MarshalOptions{Deterministic: true})
 		if err != nil {
 			return err
 		}
@@ -612,7 +660,7 @@ func MakeConfigSchemaCommand[T field.Configurable](
 	name string,
 	v *viper.Viper,
 	confschema field.Configuration,
-	getconnector GetConnectorFunc[T],
+	getconnector GetConnectorFunc2[T],
 ) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		// Sort fields by FieldName
