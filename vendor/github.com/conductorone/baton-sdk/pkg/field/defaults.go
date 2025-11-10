@@ -59,6 +59,11 @@ var (
 		WithDescription("The start time of the event feed to read events from"),
 		WithPersistent(true),
 		WithExportTarget(ExportTargetNone))
+	eventFeedCursorField = StringField("event-feed-cursor",
+		WithHidden(true),
+		WithDescription("The cursor to use for resuming the event feed from a specific point"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone))
 	fileField = StringField("file", WithShortHand("f"), WithDefaultValue("sync.c1z"), WithDescription("The path to the c1z file to sync with"),
 		WithPersistent(true), WithExportTarget(ExportTargetNone))
 	grantEntitlementField = StringField("grant-entitlement", WithHidden(true), WithDescription("The id of the entitlement to grant to the supplied principal"),
@@ -90,6 +95,24 @@ var (
 		WithPersistent(true),
 		WithExportTarget(ExportTargetNone),
 	)
+
+	authMethod = StringField(
+		"auth-method",
+		WithDescription(""),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+	)
+
+	skipGrants = BoolField("skip-grants",
+		WithDescription("This must be set to skip syncing of grants only (entitlements will still be synced)"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone),
+		WithHidden(true),
+	)
+	syncResourceTypeIDs = StringSliceField("sync-resource-types",
+		WithDescription("The resource type IDs to sync"),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone))
 	diffSyncsField = BoolField(
 		"diff-syncs",
 		WithDescription("Create a new partial SyncID from a base and applied sync."),
@@ -207,6 +230,13 @@ var (
 		WithRequired(true),
 		WithDescription("The expected audience claim in the JWT (optional)"),
 		WithExportTarget(ExportTargetNone))
+
+	ServerSessionStoreMaximumSizeField = IntField("session-store-maximum-size",
+		WithDescription("The maximum size of the local in-memory session store cache in bytes."),
+		WithDefaultValue(1024*1024*15),
+		WithExportTarget(ExportTargetOps),
+		WithHidden(true),
+		WithPersistent(true))
 )
 
 func LambdaServerFields() []SchemaField {
@@ -243,6 +273,7 @@ var DefaultFields = []SchemaField{
 	eventFeedField,
 	eventFeedIdField,
 	eventFeedStartAtField,
+	eventFeedCursorField,
 	fileField,
 	grantEntitlementField,
 	grantPrincipalField,
@@ -257,7 +288,9 @@ var DefaultFields = []SchemaField{
 	logLevelDebugExpiresAtField,
 	skipFullSync,
 	targetedSyncResourceIDs,
+	syncResourceTypeIDs,
 	skipEntitlementsAndGrants,
+	skipGrants,
 	externalResourceC1ZField,
 	externalResourceEntitlementIdFilter,
 	diffSyncsField,
@@ -269,6 +302,7 @@ var DefaultFields = []SchemaField{
 	compactSyncsField,
 	invokeActionField,
 	invokeActionArgsField,
+	ServerSessionStoreMaximumSizeField,
 
 	otelCollectorEndpoint,
 	otelCollectorEndpointTLSCertPath,
@@ -276,6 +310,8 @@ var DefaultFields = []SchemaField{
 	otelCollectorEndpointTlSInsecure,
 	otelTracingDisabled,
 	otelLoggingDisabled,
+
+	authMethod,
 }
 
 func IsFieldAmongDefaultList(f SchemaField) bool {
