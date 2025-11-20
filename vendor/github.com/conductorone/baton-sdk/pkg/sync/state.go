@@ -19,6 +19,7 @@ type State interface {
 	ResourceTypeID(ctx context.Context) string
 	ResourceID(ctx context.Context) string
 	EntitlementGraph(ctx context.Context) *expand.EntitlementGraph
+	ClearEntitlementGraph(ctx context.Context)
 	ParentResourceID(ctx context.Context) string
 	ParentResourceTypeID(ctx context.Context) string
 	PageToken(ctx context.Context) string
@@ -33,6 +34,8 @@ type State interface {
 	SetShouldFetchRelatedResources()
 	ShouldSkipEntitlementsAndGrants() bool
 	SetShouldSkipEntitlementsAndGrants()
+	ShouldSkipGrants() bool
+	SetShouldSkipGrants()
 }
 
 // ActionOp represents a sync operation.
@@ -141,6 +144,7 @@ type state struct {
 	hasExternalResourceGrants       bool
 	shouldFetchRelatedResources     bool
 	shouldSkipEntitlementsAndGrants bool
+	shouldSkipGrants                bool
 }
 
 // serializedToken is used to serialize the token to JSON. This separate object is used to avoid having exported fields
@@ -153,6 +157,7 @@ type serializedToken struct {
 	HasExternalResourceGrants       bool                     `json:"has_external_resource_grants,omitempty"`
 	ShouldFetchRelatedResources     bool                     `json:"should_fetch_related_resources,omitempty"`
 	ShouldSkipEntitlementsAndGrants bool                     `json:"should_skip_entitlements_and_grants,omitempty"`
+	ShouldSkipGrants                bool                     `json:"should_skip_grants,omitempty"`
 }
 
 // push adds a new action to the stack. If there is no current state, the action is directly set to current, else
@@ -221,8 +226,10 @@ func (st *state) Unmarshal(input string) error {
 		st.actions = token.Actions
 		st.currentAction = token.CurrentAction
 		st.needsExpansion = token.NeedsExpansion
+		st.entitlementGraph = token.EntitlementGraph
 		st.hasExternalResourceGrants = token.HasExternalResourceGrants
 		st.shouldSkipEntitlementsAndGrants = token.ShouldSkipEntitlementsAndGrants
+		st.shouldSkipGrants = token.ShouldSkipGrants
 		st.shouldFetchRelatedResources = token.ShouldFetchRelatedResources
 	} else {
 		st.actions = nil
@@ -246,6 +253,7 @@ func (st *state) Marshal() (string, error) {
 		HasExternalResourceGrants:       st.hasExternalResourceGrants,
 		ShouldFetchRelatedResources:     st.shouldFetchRelatedResources,
 		ShouldSkipEntitlementsAndGrants: st.shouldSkipEntitlementsAndGrants,
+		ShouldSkipGrants:                st.shouldSkipGrants,
 	})
 	if err != nil {
 		return "", err
@@ -314,6 +322,14 @@ func (st *state) SetShouldSkipEntitlementsAndGrants() {
 	st.shouldSkipEntitlementsAndGrants = true
 }
 
+func (st *state) ShouldSkipGrants() bool {
+	return st.shouldSkipGrants
+}
+
+func (st *state) SetShouldSkipGrants() {
+	st.shouldSkipGrants = true
+}
+
 // PageToken returns the page token for the current action.
 func (st *state) PageToken(ctx context.Context) string {
 	c := st.Current()
@@ -354,6 +370,11 @@ func (st *state) EntitlementGraph(ctx context.Context) *expand.EntitlementGraph 
 		st.entitlementGraph = expand.NewEntitlementGraph(ctx)
 	}
 	return st.entitlementGraph
+}
+
+// ClearEntitlementGraph clears the entitlement graph. This is meant to make the final sync token less confusing.
+func (st *state) ClearEntitlementGraph(ctx context.Context) {
+	st.entitlementGraph = nil
 }
 
 func (st *state) ParentResourceID(ctx context.Context) string {
