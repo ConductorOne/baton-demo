@@ -13,7 +13,8 @@
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION"
-      ]
+      ],
+      "permissions": {}
     },
     {
       "resourceType": {
@@ -23,7 +24,8 @@
       "capabilities": [
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC"
-      ]
+      ],
+      "permissions": {}
     },
     {
       "resourceType": {
@@ -37,7 +39,8 @@
         "CAPABILITY_SYNC",
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION"
-      ]
+      ],
+      "permissions": {}
     },
     {
       "resourceType": {
@@ -57,10 +60,11 @@
         "CAPABILITY_TARGETED_SYNC",
         "CAPABILITY_PROVISION",
         "CAPABILITY_ACCOUNT_PROVISIONING",
-        "CAPABILITY_CREDENTIAL_ROTATION",
+        "CAPABILITY_RESOURCE_DELETE",
         "CAPABILITY_RESOURCE_CREATE",
-        "CAPABILITY_RESOURCE_DELETE"
-      ]
+        "CAPABILITY_CREDENTIAL_ROTATION"
+      ],
+      "permissions": {}
     }
   ],
   "connectorCapabilities": [

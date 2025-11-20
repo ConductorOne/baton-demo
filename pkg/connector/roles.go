@@ -11,7 +11,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
-	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/types/resource"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -29,35 +29,35 @@ func (o *roleBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 func roleResource(r *client.Role, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
-	traits := []sdkResource.RoleTraitOption{
-		sdkResource.WithRoleProfile(map[string]any{
+	traits := []resource.RoleTraitOption{
+		resource.WithRoleProfile(map[string]any{
 			"role_color":         "blue",
 			"total_assignments":  len(r.DirectAssignments) + len(r.GroupAssignments),
 			"direct_assignments": len(r.DirectAssignments),
 			"group_assignments":  len(r.GroupAssignments),
 		}),
 	}
-	return sdkResource.NewRoleResource(r.Name, roleResourceType, r.Id, traits, sdkResource.WithParentResourceID(parentResourceID))
+	return resource.NewRoleResource(r.Name, roleResourceType, r.Id, traits, resource.WithParentResourceID(parentResourceID))
 }
 
 // List returns all the roles from the database as resource objects
 // Roles include the role trait because they have the 'shape' of the well known Role type.
-func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, ops resource.SyncOpAttrs) ([]*v2.Resource, *resource.SyncOpResults, error) {
 	roles, err := o.client.ListRoles(ctx)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	var ret []*v2.Resource
 	for _, r := range roles {
 		role, err := roleResource(r, parentResourceID)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 		ret = append(ret, role)
 	}
 
-	return ret, "", nil, nil
+	return ret, nil, nil
 }
 
 func (o *roleBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
@@ -74,21 +74,21 @@ func (o *roleBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parent
 }
 
 // Entitlements returns an assignment entitlement.
-func (o *roleBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (o *roleBuilder) Entitlements(_ context.Context, resource *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
 	// This entitlement represents a User or Group being assigned the role
 	assignment := sdkEntitlement.NewAssignmentEntitlement(resource, roleAssignmentEntitlement, sdkEntitlement.WithGrantableTo(userResourceType, groupResourceType))
 	assignment.Description = fmt.Sprintf("Is assigned the %s role", resource.DisplayName)
 
-	return []*v2.Entitlement{assignment}, "", nil, nil
+	return []*v2.Entitlement{assignment}, nil, nil
 }
 
 // Grants returns grants for the assigned entitlement. We will return a grant for each group that is assigned the role, in addition to a grant for every member of the group/
 // Users can also be directly assigned to a role to receive a grant.
-func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (o *roleBuilder) Grants(ctx context.Context, r *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Grant, *resource.SyncOpResults, error) {
 	b := &pagination.Bag{}
-	err := b.Unmarshal(pToken.Token)
+	err := b.Unmarshal(ops.PageToken.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	if b.Current() == nil {
@@ -102,12 +102,12 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 		})
 	}
 
-	role, err := o.client.GetRole(ctx, resource.Id.Resource)
+	role, err := o.client.GetRole(ctx, r.Id.Resource)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
-	limit := pToken.Size
+	limit := ops.PageToken.Size
 	if limit == 0 {
 		limit = 1000
 	}
@@ -118,18 +118,18 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 	offset, err := strconv.Atoi(ps.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 	switch ps.ResourceTypeID {
 	case "direct":
 		end := min(offset+limit, len(role.DirectAssignments))
 		for _, userID := range role.DirectAssignments[offset:end] {
-			pID, err := sdkResource.NewResourceID(userResourceType, userID)
+			pID, err := resource.NewResourceID(userResourceType, userID)
 			if err != nil {
-				return nil, "", nil, err
+				return nil, nil, err
 			}
 
-			ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(r, roleAssignmentEntitlement, pID))
 		}
 
 		nextPage := ""
@@ -139,22 +139,22 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 		nextPageToken, err := b.NextToken(nextPage)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
-		return ret, nextPageToken, nil, nil
+		return ret, &resource.SyncOpResults{NextPageToken: nextPageToken}, nil
 	case "group":
 		end := min(offset+limit, len(role.GroupAssignments))
 		for _, grpID := range role.GroupAssignments[offset:end] {
-			pID, err := sdkResource.NewResourceID(groupResourceType, grpID)
+			pID, err := resource.NewResourceID(groupResourceType, grpID)
 			if err != nil {
-				return nil, "", nil, err
+				return nil, nil, err
 			}
 
 			entitlementIDs := []string{
 				fmt.Sprintf("group:%s:member", grpID),
 				fmt.Sprintf("group:%s:admin", grpID),
 			}
-			grant := sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+			grant := sdkGrant.NewGrant(r, roleAssignmentEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
 				EntitlementIds: entitlementIDs,
 			}))
 			ret = append(ret, grant)
@@ -166,11 +166,11 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 
 		nextPageToken, err := b.NextToken(nextPage)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
-		return ret, nextPageToken, nil, nil
+		return ret, &resource.SyncOpResults{NextPageToken: nextPageToken}, nil
 	default:
-		return nil, "", nil, fmt.Errorf("unknown resource type")
+		return nil, nil, fmt.Errorf("unknown resource type")
 	}
 }
 

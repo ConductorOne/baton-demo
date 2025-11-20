@@ -12,7 +12,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
-	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/types/resource"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -36,33 +36,33 @@ func groupResource(g *client.Group, parentResourceID *v2.ResourceId) (*v2.Resour
 	profile["group_color"] = "green"
 	profile["group_size"] = len(g.Members) + len(g.Admins)
 
-	return sdkResource.NewGroupResource(
+	return resource.NewGroupResource(
 		g.Name,
 		groupResourceType,
 		g.Id,
-		[]sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(profile)},
-		sdkResource.WithParentResourceID(parentResourceID),
+		[]resource.GroupTraitOption{resource.WithGroupProfile(profile)},
+		resource.WithParentResourceID(parentResourceID),
 	)
 }
 
 // List returns all the groups from the database as resource objects.
 // Groups include the GroupTrait because they have the 'shape' of the well known Group type.
-func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, ops resource.SyncOpAttrs) ([]*v2.Resource, *resource.SyncOpResults, error) {
 	groups, err := o.client.ListGroups(ctx)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	var ret []*v2.Resource
 	for _, g := range groups {
 		group, err := groupResource(g, parentResourceID)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 		ret = append(ret, group)
 	}
 
-	return ret, "", nil, nil
+	return ret, nil, nil
 }
 
 func (o *groupBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
@@ -78,7 +78,7 @@ func (o *groupBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, paren
 }
 
 // Entitlements returns a membership and admin entitlement.
-func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
 	// This entitlement represents being a member of the group, and it can be granted to Users.
 	member := sdkEntitlement.NewAssignmentEntitlement(resource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	member.Description = fmt.Sprintf("Is a member of the %s group", resource.DisplayName)
@@ -86,15 +86,15 @@ func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	admin := sdkEntitlement.NewPermissionEntitlement(resource, groupAdminEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	admin.Description = fmt.Sprintf("Is an admin of the %s group", resource.DisplayName)
 
-	return []*v2.Entitlement{member, admin}, "", nil, nil
+	return []*v2.Entitlement{member, admin}, nil, nil
 }
 
 // Grants returns grant information for group administrators and members.
-func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (o *groupBuilder) Grants(ctx context.Context, r *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Grant, *resource.SyncOpResults, error) {
 	b := &pagination.Bag{}
-	err := b.Unmarshal(pToken.Token)
+	err := b.Unmarshal(ops.PageToken.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	if b.Current() == nil {
@@ -108,12 +108,12 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 		})
 	}
 
-	grp, err := o.client.GetGroup(ctx, resource.Id.Resource)
+	grp, err := o.client.GetGroup(ctx, r.Id.Resource)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
-	limit := pToken.Size
+	limit := ops.PageToken.Size
 	if limit == 0 {
 		limit = 1000
 	}
@@ -124,21 +124,21 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 
 	offset, err := strconv.Atoi(ps.Token)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	switch ps.ResourceTypeID {
 	case "admins":
 		end := min(offset+limit, len(grp.Admins))
 		for _, adminID := range grp.Admins[offset:end] {
-			pID, err := sdkResource.NewResourceID(userResourceType, adminID)
+			pID, err := resource.NewResourceID(userResourceType, adminID)
 			if err != nil {
-				return nil, "", nil, err
+				return nil, nil, err
 			}
 
 			// Each admin gets the admin entitlement in addition to the member entitlement
-			ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
-			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(r, groupAdminEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(r, groupMemberEntitlement, pID))
 		}
 
 		nextPage := ""
@@ -148,18 +148,18 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 
 		nextPageToken, err := b.NextToken(nextPage)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
-		return ret, nextPageToken, nil, nil
+		return ret, &resource.SyncOpResults{NextPageToken: nextPageToken}, nil
 	case "members":
 		end := min(offset+limit, len(grp.Members))
 		for _, memberID := range grp.Members[offset:end] {
-			pID, err := sdkResource.NewResourceID(userResourceType, memberID)
+			pID, err := resource.NewResourceID(userResourceType, memberID)
 			if err != nil {
-				return nil, "", nil, err
+				return nil, nil, err
 			}
 
-			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+			ret = append(ret, sdkGrant.NewGrant(r, groupMemberEntitlement, pID))
 		}
 		nextPage := ""
 		if end < len(grp.Members) {
@@ -168,11 +168,11 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 
 		nextPageToken, err := b.NextToken(nextPage)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
-		return ret, nextPageToken, nil, nil
+		return ret, &resource.SyncOpResults{NextPageToken: nextPageToken}, nil
 	default:
-		return nil, "", nil, fmt.Errorf("unknown resource type")
+		return nil, nil, fmt.Errorf("unknown resource type")
 	}
 }
 
