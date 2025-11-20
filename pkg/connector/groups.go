@@ -59,7 +59,9 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		if err != nil {
 			return nil, "", nil, err
 		}
-		ret = append(ret, group)
+		if !o.client.ShouldDropResource() {
+			ret = append(ret, group)
+		}
 	}
 
 	return ret, "", nil, nil
@@ -137,8 +139,10 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 			}
 
 			// Each admin gets the admin entitlement in addition to the member entitlement
-			ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
-			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+			if !o.client.ShouldDropGrant() {
+				ret = append(ret, sdkGrant.NewGrant(resource, groupAdminEntitlement, pID))
+				ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+			}
 		}
 
 		nextPage := ""
@@ -159,7 +163,9 @@ func (o *groupBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken
 				return nil, "", nil, err
 			}
 
-			ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+			if !o.client.ShouldDropGrant() {
+				ret = append(ret, sdkGrant.NewGrant(resource, groupMemberEntitlement, pID))
+			}
 		}
 		nextPage := ""
 		if end < len(grp.Members) {

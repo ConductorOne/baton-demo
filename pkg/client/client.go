@@ -2,9 +2,11 @@ package client
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"slices"
 	"strconv"
@@ -124,6 +126,20 @@ func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 	return c, nil
 }
 
+func (c *Client) ShouldDropResource() bool {
+	gen, _ := rand.Int(rand.Reader, big.NewInt(101))
+	return gen.Int64() < int64(c.config.ResourceDropProbability)
+}
+
+func (c *Client) ShouldDropRT() bool {
+	gen, _ := rand.Int(rand.Reader, big.NewInt(101))
+	return gen.Int64() < int64(c.config.ResourceTypeDropProbability)
+}
+
+func (c *Client) ShouldDropGrant() bool {
+	gen, _ := rand.Int(rand.Reader, big.NewInt(101))
+	return gen.Int64() < int64(c.config.GrantDropProbability)
+}
 func (c *Client) Close() error {
 	return c.rawDB.Close()
 }

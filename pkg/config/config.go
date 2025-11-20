@@ -25,8 +25,29 @@ var (
 		field.WithDefaultValue(10),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
-	InitDB     = field.BoolField("init-db", field.WithDescription("Whether to initialize the database."), field.WithDefaultValue(false))
-	DbFileName = field.StringField("db-file-name", field.WithDescription("The name of the database file."), field.WithDefaultValue("baton-demo.db"))
+	InitDB                  = field.BoolField("init-db", field.WithDescription("Whether to initialize the database."), field.WithDefaultValue(false))
+	DbFileName              = field.StringField("db-file-name", field.WithDescription("The name of the database file."), field.WithDefaultValue("baton-demo.db"))
+	ResourceDropProbability = field.IntField(
+		"resource-drop-probability",
+		field.WithDescription("The probability we should drop any given resource from a sync, int from 0 - 100"),
+		field.WithDefaultValue(0),
+		field.WithInt(func(r *field.IntRuler) { r.Gte(0) }),
+		field.WithInt(func(r *field.IntRuler) { r.Lte(100) }),
+	)
+	RTDropProbability = field.IntField(
+		"resource-type-drop-probability",
+		field.WithDescription("The probability we should drop any whole resource type from the sync, int from 0 - 100"),
+		field.WithDefaultValue(0),
+		field.WithInt(func(r *field.IntRuler) { r.Gte(0) }),
+		field.WithInt(func(r *field.IntRuler) { r.Lte(100) }),
+	)
+	GrantDropProbability = field.IntField(
+		"grant-drop-probability",
+		field.WithDescription("The probability we should drop any grant from the sync, int from 0 - 100"),
+		field.WithDefaultValue(0),
+		field.WithInt(func(r *field.IntRuler) { r.Gte(0) }),
+		field.WithInt(func(r *field.IntRuler) { r.Lte(100) }),
+	)
 )
 
 var relationships = []field.SchemaFieldRelationship{}
@@ -39,4 +60,7 @@ var Config = field.NewConfiguration([]field.SchemaField{
 	UserCountField,
 	InitDB,
 	DbFileName,
+	ResourceDropProbability,
+	RTDropProbability,
+	GrantDropProbability,
 }, field.WithConstraints(relationships...))

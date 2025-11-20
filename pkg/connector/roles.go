@@ -54,7 +54,9 @@ func (o *roleBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 		if err != nil {
 			return nil, "", nil, err
 		}
-		ret = append(ret, role)
+		if !o.client.ShouldDropResource() {
+			ret = append(ret, role)
+		}
 	}
 
 	return ret, "", nil, nil
@@ -129,7 +131,9 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 				return nil, "", nil, err
 			}
 
-			ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
+			if !o.client.ShouldDropGrant() {
+				ret = append(ret, sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID))
+			}
 		}
 
 		nextPage := ""
@@ -157,7 +161,9 @@ func (o *roleBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 			grant := sdkGrant.NewGrant(resource, roleAssignmentEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
 				EntitlementIds: entitlementIDs,
 			}))
-			ret = append(ret, grant)
+			if !o.client.ShouldDropGrant() {
+				ret = append(ret, grant)
+			}
 		}
 		nextPage := ""
 		if end < len(role.GroupAssignments) {
