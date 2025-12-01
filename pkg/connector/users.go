@@ -16,16 +16,15 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/crypto"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
-	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
 type userBuilder struct {
 	client *client.Client
 }
 
-var _ connectorbuilder.AccountManager = &userBuilder{}
-var _ connectorbuilder.CredentialManager = &userBuilder{}
+var _ connectorbuilder.AccountManagerLimited = &userBuilder{}
+var _ connectorbuilder.CredentialManagerLimited = &userBuilder{}
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
@@ -50,42 +49,42 @@ func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource
 	// Add the enabled status to the profile
 	attrs["enabled"] = u.Enabled
 
-	traits := []sdkResource.UserTraitOption{
-		sdkResource.WithEmail(u.Email, true),
-		sdkResource.WithUserLogin(u.Id),
-		sdkResource.WithDetailedStatus(status, statusMessage),
-		sdkResource.WithEmployeeID(u.Id),
-		sdkResource.WithAccountType(v2.UserTrait_ACCOUNT_TYPE_HUMAN),
-		sdkResource.WithUserProfile(attrs),
+	traits := []resource.UserTraitOption{
+		resource.WithEmail(u.Email, true),
+		resource.WithUserLogin(u.Id),
+		resource.WithDetailedStatus(status, statusMessage),
+		resource.WithEmployeeID(u.Id),
+		resource.WithAccountType(v2.UserTrait_ACCOUNT_TYPE_HUMAN),
+		resource.WithUserProfile(attrs),
 	}
-	return sdkResource.NewUserResource(
+	return resource.NewUserResource(
 		u.Name,
 		userResourceType,
 		u.Id,
 		traits,
-		sdkResource.WithParentResourceID(parentResourceID),
+		resource.WithParentResourceID(parentResourceID),
 	)
 }
 
 // List returns all the users from the database as resource objects.
 // Users include a UserTrait because they are the 'shape' of a standard user.
-func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	users, nextPageToken, err := o.client.ListUsers(ctx, pToken)
+func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, ops resource.SyncOpAttrs) ([]*v2.Resource, *resource.SyncOpResults, error) {
+	users, nextPageToken, err := o.client.ListUsers(ctx, &ops.PageToken)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	var ret []*v2.Resource
 	for _, u := range users {
 		userResource, err := userResource(u, parentResourceID)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 
 		ret = append(ret, userResource)
 	}
 
-	return ret, nextPageToken, nil, nil
+	return ret, &resource.SyncOpResults{NextPageToken: nextPageToken}, nil
 }
 
 func (o *userBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
@@ -101,13 +100,13 @@ func (o *userBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parent
 }
 
 // Entitlements always returns an empty slice for users.
-func (o *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 // Grants always returns an empty slice for users since they don't have any entitlements.
-func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Grant, *resource.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 func (r *userBuilder) RotateCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsCredentialRotation, annotations.Annotations, error) {

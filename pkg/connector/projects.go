@@ -8,10 +8,9 @@ import (
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
-	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
 var (
@@ -28,27 +27,27 @@ func (o *projectBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 func projectResource(p *client.Project, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
-	return sdkResource.NewResource(p.Name, projectResourceType, p.Id, sdkResource.WithParentResourceID(parentResourceID))
+	return resource.NewResource(p.Name, projectResourceType, p.Id, resource.WithParentResourceID(parentResourceID))
 }
 
 // List returns all the projects from the database as resource objects
 // Projects don't include any traits because they don't match the 'shape' of any well known types.
-func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *projectBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, ops resource.SyncOpAttrs) ([]*v2.Resource, *resource.SyncOpResults, error) {
 	projects, err := o.client.ListProjects(ctx)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	var ret []*v2.Resource
 	for _, p := range projects {
 		project, err := projectResource(p, parentResourceID)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, nil, err
 		}
 		ret = append(ret, project)
 	}
 
-	return ret, "", nil, nil
+	return ret, nil, nil
 }
 
 func (o *projectBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
@@ -68,64 +67,63 @@ func (o *projectBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, par
 // Entitlements returns two entitlements:
 //   - Ownership of the project, grantable to a user
 //   - Access to the project, grantable to groups
-func (o *projectBuilder) Entitlements(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	access := sdkEntitlement.NewAssignmentEntitlement(resource, projectAccessEntitlement, sdkEntitlement.WithGrantableTo(groupResourceType, userResourceType))
-	access.Description = fmt.Sprintf("Has access to the %s project", resource.DisplayName)
+func (o *projectBuilder) Entitlements(ctx context.Context, r *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
+	access := sdkEntitlement.NewAssignmentEntitlement(r, projectAccessEntitlement, sdkEntitlement.WithGrantableTo(groupResourceType, userResourceType))
+	access.Description = fmt.Sprintf("Has access to the %s project", r.DisplayName)
 
-	owner := sdkEntitlement.NewPermissionEntitlement(resource, projectOwnerEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
-	owner.Description = fmt.Sprintf("Is the owner of the %s project", resource.DisplayName)
+	owner := sdkEntitlement.NewPermissionEntitlement(r, projectOwnerEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
+	owner.Description = fmt.Sprintf("Is the owner of the %s project", r.DisplayName)
 
-	return []*v2.Entitlement{access, owner}, "", nil, nil
+	return []*v2.Entitlement{access, owner}, nil, nil
 }
 
 // Grants returns grants for the access and owner entitlements. Only groups can be assigned to projects, but we will materialize group members as having access to the project.
-func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	project, err := o.client.GetProject(ctx, resource.Id.Resource)
+func (o *projectBuilder) Grants(ctx context.Context, r *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Grant, *resource.SyncOpResults, error) {
+	project, err := o.client.GetProject(ctx, r.Id.Resource)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	offset := 0
 	limit := 1000
-	if pToken != nil {
-		if pToken.Token != "" {
-			offset, err = strconv.Atoi(pToken.Token)
-			if err != nil {
-				return nil, "", nil, err
-			}
+	if ops.PageToken.Token != "" {
+		offset, err = strconv.Atoi(ops.PageToken.Token)
+		if err != nil {
+			return nil, nil, err
 		}
-		if pToken.Size > 0 {
-			limit = pToken.Size
+
+		if ops.PageToken.Size > 0 {
+			limit = ops.PageToken.Size
 		}
 	}
 	var ret []*v2.Grant
 
 	// Grant the owner entitlement to the project owner
-	ownerID, err := sdkResource.NewResourceID(userResourceType, project.Owner)
+	ownerID, err := resource.NewResourceID(userResourceType, project.Owner)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	if project.Owner != "" && offset == 0 {
-		ret = append(ret, sdkGrant.NewGrant(resource, projectOwnerEntitlement, ownerID))
+		ret = append(ret, sdkGrant.NewGrant(r, projectOwnerEntitlement, ownerID))
 		// Owners also receive the access entitlement
-		ret = append(ret, sdkGrant.NewGrant(resource, projectAccessEntitlement, ownerID))
+		ret = append(ret, sdkGrant.NewGrant(r, projectAccessEntitlement, ownerID))
 	}
 
 	// Iterate group assignments
 	if len(project.GroupAssignments) > offset {
 		end := min(offset+limit, len(project.GroupAssignments))
 		for _, grpID := range project.GroupAssignments[offset:end] {
-			pID, err := sdkResource.NewResourceID(groupResourceType, grpID)
+			pID, err := resource.NewResourceID(groupResourceType, grpID)
 			if err != nil {
-				return nil, "", nil, err
+				return nil, nil, err
 			}
 
 			entitlementIDs := []string{
 				fmt.Sprintf("group:%s:member", grpID),
 				fmt.Sprintf("group:%s:admin", grpID),
 			}
-			grant := sdkGrant.NewGrant(resource, projectAccessEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
+			grant := sdkGrant.NewGrant(r, projectAccessEntitlement, pID, sdkGrant.WithAnnotation(&v2.GrantExpandable{
 				EntitlementIds: entitlementIDs,
 			}))
 			ret = append(ret, grant)
@@ -136,7 +134,7 @@ func (o *projectBuilder) Grants(ctx context.Context, resource *v2.Resource, pTok
 	if len(project.GroupAssignments) > offset+limit {
 		nextPageToken = strconv.Itoa(offset + limit)
 	}
-	return ret, nextPageToken, nil, nil
+	return ret, &resource.SyncOpResults{NextPageToken: nextPageToken}, nil
 }
 
 func newProjectBuilder(client *client.Client) *projectBuilder {
