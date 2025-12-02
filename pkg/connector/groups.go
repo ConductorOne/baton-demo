@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"github.com/conductorone/baton-demo/pkg/client"
+	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
@@ -15,6 +17,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 var (
@@ -247,6 +250,100 @@ func (o *groupBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown entitlement")
 	}
+}
+
+func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
+	err := registry.Register(ctx, &v2.ResourceActionSchema{
+		Name: "create",
+		Arguments: []*config.Field{
+			{Name: "name", DisplayName: "Group Name", Field: &config.Field_StringField{}, IsRequired: true},
+			{Name: "admins", DisplayName: "Admins", Field: &config.Field_ResourceIdListField{}, IsRequired: true},
+			{Name: "members", DisplayName: "Members", Field: &config.Field_ResourceIdListField{}, IsRequired: true},
+		},
+		ReturnTypes: []*config.Field{
+			{Name: "success", Field: &config.Field_BoolField{}},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_RESOURCE_CREATE},
+	}, o.handleCreateGroupAction)
+	return err
+}
+
+func (o *groupBuilder) registerDeleteGroupAction(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
+	// err := registry.Register(ctx, actions.NewDeleteActionSchema(), o.handleDeleteGroupAction)
+	err := registry.Register(ctx, &v2.ResourceActionSchema{
+		Name: "delete",
+		Arguments: []*config.Field{
+			{Name: "resource", DisplayName: "Resource", Field: &config.Field_ResourceIdField{}, IsRequired: true},
+		},
+		ReturnTypes: []*config.Field{
+			{Name: "success", Field: &config.Field_BoolField{}},
+		},
+		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_RESOURCE_DELETE},
+	}, o.handleDeleteGroupAction)
+	return err
+}
+
+func (o *groupBuilder) handleCreateGroupAction(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	groupName, err := actions.RequireStringArg(args, "name")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	groupAdmins, err := actions.RequireResourceIdListArg(args, "admins")
+	if err != nil {
+		return nil, nil, err
+	}
+	groupMembers, err := actions.RequireResourceIdListArg(args, "members")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	admins := make([]string, len(groupAdmins))
+	for i, admin := range groupAdmins {
+		admins[i] = admin.Resource
+	}
+	members := make([]string, len(groupMembers))
+	for i, member := range groupMembers {
+		members[i] = member.Resource
+	}
+
+	_, err = o.client.CreateGroup(ctx, fmt.Sprintf("group-%s", strings.ToLower(groupName)), groupName, admins, members)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+	}}, nil, nil
+}
+
+func (o *groupBuilder) handleDeleteGroupAction(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	resourceID, err := actions.RequireResourceIDArg(args, "resource")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	err = o.client.DeleteGroup(ctx, resourceID.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
+	}}, nil, nil
+}
+
+func (o *groupBuilder) ResourceActions(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
+	err := o.registerCreateGroupAction(ctx, registry)
+	if err != nil {
+		return err
+	}
+
+	err = o.registerDeleteGroupAction(ctx, registry)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func newGroupBuilder(client *client.Client) *groupBuilder {
