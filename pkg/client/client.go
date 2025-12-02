@@ -655,11 +655,19 @@ func (c *Client) CreateGroup(ctx context.Context, groupID, groupName string, gro
 		return nil, errors.New("group already exists")
 	}
 
+	admins := ""
+	if len(groupAdmins) > 0 {
+		admins = strings.Join(groupAdmins, ",")
+	}
+	members := ""
+	if len(groupMembers) > 0 {
+		members = strings.Join(groupMembers, ",")
+	}
 	row := goqu.Record{
 		"id":      groupID,
 		"name":    groupName,
-		"admins":  strings.Join(groupAdmins, ","),
-		"members": strings.Join(groupMembers, ","),
+		"admins":  admins,
+		"members": members,
 	}
 	baseGroupQ := c.db.Insert(groups.Name()).Prepared(true)
 	baseGroupQ = baseGroupQ.Rows(row)

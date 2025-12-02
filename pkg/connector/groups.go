@@ -257,8 +257,8 @@ func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry a
 		Name: "create",
 		Arguments: []*config.Field{
 			{Name: "name", DisplayName: "Group Name", Field: &config.Field_StringField{}, IsRequired: true},
-			{Name: "admins", DisplayName: "Admins", Field: &config.Field_ResourceIdListField{}, IsRequired: true},
-			{Name: "members", DisplayName: "Members", Field: &config.Field_ResourceIdListField{}, IsRequired: true},
+			{Name: "admins", DisplayName: "Admins", Field: &config.Field_ResourceIdListField{}},
+			{Name: "members", DisplayName: "Members", Field: &config.Field_ResourceIdListField{}},
 		},
 		ReturnTypes: []*config.Field{
 			{Name: "success", Field: &config.Field_BoolField{}},
@@ -289,22 +289,20 @@ func (o *groupBuilder) handleCreateGroupAction(ctx context.Context, args *struct
 		return nil, nil, err
 	}
 
-	groupAdmins, err := actions.RequireResourceIdListArg(args, "admins")
-	if err != nil {
-		return nil, nil, err
-	}
-	groupMembers, err := actions.RequireResourceIdListArg(args, "members")
-	if err != nil {
-		return nil, nil, err
+	var admins []string
+	groupAdmins, ok := actions.GetResourceIdListArg(args, "admins")
+	if ok {
+		for _, admin := range groupAdmins {
+			admins = append(admins, admin.Resource)
+		}
 	}
 
-	admins := make([]string, len(groupAdmins))
-	for i, admin := range groupAdmins {
-		admins[i] = admin.Resource
-	}
-	members := make([]string, len(groupMembers))
-	for i, member := range groupMembers {
-		members[i] = member.Resource
+	var members []string
+	groupMembers, ok := actions.GetResourceIdListArg(args, "members")
+	if ok {
+		for _, member := range groupMembers {
+			members = append(members, member.Resource)
+		}
 	}
 
 	_, err = o.client.CreateGroup(ctx, fmt.Sprintf("group-%s", strings.ToLower(groupName)), groupName, admins, members)
