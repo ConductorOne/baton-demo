@@ -262,6 +262,7 @@ func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry a
 		},
 		ReturnTypes: []*config.Field{
 			{Name: "success", Field: &config.Field_BoolField{}},
+			{Name: "resource", Field: &config.Field_ResourceField{}},
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_RESOURCE_CREATE},
 	}, o.handleCreateGroupAction)
@@ -305,14 +306,22 @@ func (o *groupBuilder) handleCreateGroupAction(ctx context.Context, args *struct
 		}
 	}
 
-	_, err = o.client.CreateGroup(ctx, fmt.Sprintf("group-%s", strings.ToLower(groupName)), groupName, admins, members)
+	group, err := o.client.CreateGroup(ctx, fmt.Sprintf("group-%s", strings.ToLower(groupName)), groupName, admins, members)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-	}}, nil, nil
+	resource, err := groupResource(group, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resourceRv, err := actions.NewResourceReturnField("resource", resource)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return actions.NewReturnValues(true, resourceRv), nil, nil
 }
 
 func (o *groupBuilder) handleDeleteGroupAction(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
@@ -326,9 +335,7 @@ func (o *groupBuilder) handleDeleteGroupAction(ctx context.Context, args *struct
 		return nil, nil, err
 	}
 
-	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		"success": {Kind: &structpb.Value_BoolValue{BoolValue: true}},
-	}}, nil, nil
+	return actions.NewReturnValues(true), nil, nil
 }
 
 func (o *groupBuilder) ResourceActions(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
