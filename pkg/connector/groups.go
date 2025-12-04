@@ -253,7 +253,7 @@ func (o *groupBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations
 }
 
 func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
-	err := registry.Register(ctx, &v2.ResourceActionSchema{
+	err := registry.Register(ctx, &v2.BatonActionSchema{
 		Name: "create",
 		Arguments: []*config.Field{
 			{Name: "name", DisplayName: "Group Name", Field: &config.Field_StringField{}, IsRequired: true},
@@ -271,7 +271,7 @@ func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry a
 
 func (o *groupBuilder) registerDeleteGroupAction(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
 	// err := registry.Register(ctx, actions.NewDeleteActionSchema(), o.handleDeleteGroupAction)
-	err := registry.Register(ctx, &v2.ResourceActionSchema{
+	err := registry.Register(ctx, &v2.BatonActionSchema{
 		Name: "delete",
 		Arguments: []*config.Field{
 			{Name: "resource", DisplayName: "Resource", Field: &config.Field_ResourceIdField{}, IsRequired: true},
