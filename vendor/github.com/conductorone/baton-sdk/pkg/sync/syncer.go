@@ -210,11 +210,12 @@ type syncer struct {
 	skipFullSync                        bool
 	lastCheckPointTime                  time.Time
 	counts                              *ProgressCounts
-	targetedSyncResourceIDs             []string
+	targetedSyncResources               []*v2.Resource
 	onlyExpandGrants                    bool
 	dontExpandGrants                    bool
 	syncID                              string
 	skipEGForResourceType               map[string]bool
+	skipEntitlementsForResourceType     map[string]bool
 	skipEntitlementsAndGrants           bool
 	skipGrants                          bool
 	resourceTypeTraits                  map[string][]v2.ResourceType_Trait
@@ -276,9 +277,9 @@ func isWarning(ctx context.Context, err error) bool {
 func (s *syncer) startOrResumeSync(ctx context.Context) (string, bool, error) {
 	// Sync resuming logic:
 	// If we know our sync ID, set it as the current sync and return (resuming that sync).
-	// If targetedSyncResourceIDs is not set, find the most recent unfinished sync of our desired sync type & resume it (regardless of partial or full).
+	// If targetedSyncResources is not set, find the most recent unfinished sync of our desired sync type & resume it (regardless of partial or full).
 	//   If there are no unfinished syncs of our desired sync type, start a new sync.
-	// If targetedSyncResourceIDs is set, start a new partial sync. Use the most recent completed sync as the parent sync ID (if it exists).
+	// If targetedSyncResources is set, start a new partial sync. Use the most recent completed sync as the parent sync ID (if it exists).
 
 	if s.syncID != "" {
 		err := s.store.SetCurrentSync(ctx, s.syncID)
@@ -291,7 +292,7 @@ func (s *syncer) startOrResumeSync(ctx context.Context) (string, bool, error) {
 	var syncID string
 	var newSync bool
 	var err error
-	if len(s.targetedSyncResourceIDs) == 0 {
+	if len(s.targetedSyncResources) == 0 {
 		syncID, newSync, err = s.store.StartOrResumeSync(ctx, s.syncType, "")
 		if err != nil {
 			return "", false, err
@@ -382,11 +383,7 @@ func (s *syncer) Sync(ctx context.Context) error {
 
 	// Validate any targeted resource IDs before starting a sync.
 	targetedResources := []*v2.Resource{}
-	for _, resourceID := range s.targetedSyncResourceIDs {
-		r, err := bid.ParseResourceBid(resourceID)
-		if err != nil {
-			return fmt.Errorf("error parsing resource id %s: %w", resourceID, err)
-		}
+	for _, r := range s.targetedSyncResources {
 		if len(s.syncResourceTypes) > 0 {
 			if _, ok := syncResourceTypeMap[r.GetId().GetResourceType()]; !ok {
 				continue
@@ -475,9 +472,12 @@ func (s *syncer) Sync(ctx context.Context) error {
 			return err
 		}
 
-		// TODO: count actions divided by warnings and error if warning percentage is too high
+		// If we have more than 10 warnings and more than 10% of actions ended in a warning, exit the sync.
 		if len(warnings) > 10 {
-			return fmt.Errorf("too many warnings, exiting sync. warnings: %v", warnings)
+			completedActionsCount := s.state.GetCompletedActionsCount()
+			if completedActionsCount > 0 && float64(len(warnings))/float64(completedActionsCount) > 0.1 {
+				return fmt.Errorf("too many warnings, exiting sync. warnings: %v completed actions: %d", warnings, completedActionsCount)
+			}
 		}
 		select {
 		case <-runCtx.Done():
@@ -550,7 +550,9 @@ func (s *syncer) Sync(ctx context.Context) error {
 				if !s.state.ShouldSkipGrants() {
 					s.state.PushAction(ctx, Action{Op: SyncGrantsOp})
 				}
+
 				s.state.PushAction(ctx, Action{Op: SyncEntitlementsOp})
+
 				s.state.PushAction(ctx, Action{Op: SyncStaticEntitlementsOp})
 			}
 			s.state.PushAction(ctx, Action{Op: SyncResourcesOp})
@@ -659,6 +661,7 @@ func (s *syncer) Sync(ctx context.Context) error {
 
 	// Force a checkpoint to clear completed actions & entitlement graph in sync_token.
 	s.state.ClearEntitlementGraph(ctx)
+
 	err = s.Checkpoint(ctx, true)
 	if err != nil {
 		return err
@@ -950,7 +953,7 @@ func (s *syncer) SyncTargetedResource(ctx context.Context) error {
 		})
 	}
 
-	shouldSkipEnts, err := s.shouldSkipEntitlementsAndGrants(ctx, resource)
+	shouldSkipEnts, err := s.shouldSkipEntitlements(ctx, resource)
 	if err != nil {
 		return err
 	}
@@ -1190,6 +1193,43 @@ func (s *syncer) shouldSkipGrants(ctx context.Context, r *v2.Resource) (bool, er
 	return s.shouldSkipEntitlementsAndGrants(ctx, r)
 }
 
+func (s *syncer) shouldSkipEntitlements(ctx context.Context, r *v2.Resource) (bool, error) {
+	ctx, span := tracer.Start(ctx, "syncer.shouldSkipEntitlements")
+	defer span.End()
+
+	ok, err := s.shouldSkipEntitlementsAndGrants(ctx, r)
+	if err != nil {
+		return false, err
+	}
+
+	if ok {
+		return true, nil
+	}
+
+	rAnnos := annotations.Annotations(r.GetAnnotations())
+	if rAnnos.Contains(&v2.SkipEntitlements{}) || rAnnos.Contains(&v2.SkipEntitlementsAndGrants{}) {
+		return true, nil
+	}
+
+	if skip, ok := s.skipEntitlementsForResourceType[r.GetId().GetResourceType()]; ok {
+		return skip, nil
+	}
+
+	rt, err := s.store.GetResourceType(ctx, reader_v2.ResourceTypesReaderServiceGetResourceTypeRequest_builder{
+		ResourceTypeId: r.GetId().GetResourceType(),
+	}.Build())
+	if err != nil {
+		return false, err
+	}
+
+	rtAnnos := annotations.Annotations(rt.GetResourceType().GetAnnotations())
+
+	skipEntitlements := rtAnnos.Contains(&v2.SkipEntitlements{}) || rtAnnos.Contains(&v2.SkipEntitlementsAndGrants{})
+	s.skipEntitlementsForResourceType[r.GetId().GetResourceType()] = skipEntitlements
+
+	return skipEntitlements, nil
+}
+
 // SyncEntitlements fetches the entitlements from the connector. It first lists each resource from the datastore,
 // and pushes an action to fetch the entitlements for each resource.
 func (s *syncer) SyncEntitlements(ctx context.Context) error {
@@ -1220,7 +1260,7 @@ func (s *syncer) SyncEntitlements(ctx context.Context) error {
 		}
 
 		for _, r := range resp.GetList() {
-			shouldSkipEntitlements, err := s.shouldSkipEntitlementsAndGrants(ctx, r)
+			shouldSkipEntitlements, err := s.shouldSkipEntitlements(ctx, r)
 			if err != nil {
 				return err
 			}
@@ -1550,139 +1590,175 @@ func (s *syncer) SyncAssets(ctx context.Context) error {
 	return nil
 }
 
-// SyncGrantExpansion documentation pending.
+// SyncGrantExpansion handles the grant expansion phase of sync.
+// It first loads the entitlement graph from grants, fixes any cycles, then runs expansion.
 func (s *syncer) SyncGrantExpansion(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "syncer.SyncGrantExpansion")
 	defer span.End()
 
-	l := ctxzap.Extract(ctx)
 	entitlementGraph := s.state.EntitlementGraph(ctx)
-	if !entitlementGraph.Loaded {
-		pageToken := s.state.PageToken(ctx)
 
-		if pageToken == "" {
-			l.Info("Expanding grants...")
-			s.handleInitialActionForStep(ctx, *s.state.Current())
-		}
-		resp, err := s.store.ListGrants(ctx, v2.GrantsServiceListGrantsRequest_builder{PageToken: pageToken}.Build())
+	// Phase 1: Load the entitlement graph from grants (paginated)
+	if !entitlementGraph.Loaded {
+		err := s.loadEntitlementGraph(ctx, entitlementGraph)
 		if err != nil {
 			return err
-		}
-
-		// We want to take action on the next page before we push any new actions
-		if resp.GetNextPageToken() != "" {
-			err = s.state.NextPage(ctx, resp.GetNextPageToken())
-			if err != nil {
-				return err
-			}
-		} else {
-			l.Debug("Finished loading grants to expand")
-			entitlementGraph.Loaded = true
-		}
-
-		for _, grant := range resp.GetList() {
-			annos := annotations.Annotations(grant.GetAnnotations())
-			expandable := &v2.GrantExpandable{}
-			_, err := annos.Pick(expandable)
-			if err != nil {
-				return err
-			}
-			if len(expandable.GetEntitlementIds()) == 0 {
-				continue
-			}
-
-			principalID := grant.GetPrincipal().GetId()
-			if principalID == nil {
-				return fmt.Errorf("principal id was nil")
-			}
-
-			// FIXME(morgabra) Log and skip some of the error paths here?
-			for _, srcEntitlementID := range expandable.GetEntitlementIds() {
-				l.Debug(
-					"Expandable entitlement found",
-					zap.String("src_entitlement_id", srcEntitlementID),
-					zap.String("dst_entitlement_id", grant.GetEntitlement().GetId()),
-				)
-
-				srcEntitlement, err := s.store.GetEntitlement(ctx, reader_v2.EntitlementsReaderServiceGetEntitlementRequest_builder{
-					EntitlementId: srcEntitlementID,
-				}.Build())
-				if err != nil {
-					l.Error("error fetching source entitlement",
-						zap.String("src_entitlement_id", srcEntitlementID),
-						zap.String("dst_entitlement_id", grant.GetEntitlement().GetId()),
-						zap.Error(err),
-					)
-					continue
-				}
-
-				// The expand annotation points at entitlements by id. Those entitlements' resource should match
-				// the current grant's principal, so we don't allow expanding arbitrary entitlements.
-				sourceEntitlementResourceID := srcEntitlement.GetEntitlement().GetResource().GetId()
-				if sourceEntitlementResourceID == nil {
-					return fmt.Errorf("source entitlement resource id was nil")
-				}
-				if principalID.GetResourceType() != sourceEntitlementResourceID.GetResourceType() ||
-					principalID.GetResource() != sourceEntitlementResourceID.GetResource() {
-					l.Error(
-						"source entitlement resource id did not match grant principal id",
-						zap.String("grant_principal_id", principalID.String()),
-						zap.String("source_entitlement_resource_id", sourceEntitlementResourceID.String()))
-
-					return fmt.Errorf("source entitlement resource id did not match grant principal id")
-				}
-
-				entitlementGraph.AddEntitlement(grant.GetEntitlement())
-				entitlementGraph.AddEntitlement(srcEntitlement.GetEntitlement())
-				err = entitlementGraph.AddEdge(ctx,
-					srcEntitlement.GetEntitlement().GetId(),
-					grant.GetEntitlement().GetId(),
-					expandable.GetShallow(),
-					expandable.GetResourceTypeIds(),
-				)
-				if err != nil {
-					return fmt.Errorf("error adding edge to graph: %w", err)
-				}
-			}
-		}
-		if entitlementGraph.Loaded {
-			l.Info("Finished loading entitlement graph", zap.Int("edges", len(entitlementGraph.Edges)))
 		}
 		return nil
 	}
 
-	if entitlementGraph.Loaded {
-		comps, sccMetrics := entitlementGraph.ComputeCyclicComponents(ctx)
-		if len(comps) > 0 {
-			// Log a sample cycle
-			l.Warn(
-				"cycle detected in entitlement graph",
-				zap.Any("cycle", comps[0]),
-				zap.Any("scc_metrics", sccMetrics),
-			)
-			l.Debug("initial graph stats",
-				zap.Int("edges", len(entitlementGraph.Edges)),
-				zap.Int("nodes", len(entitlementGraph.Nodes)),
-				zap.Int("actions", len(entitlementGraph.Actions)),
-				zap.Int("depth", entitlementGraph.Depth),
-				zap.Bool("has_no_cycles", entitlementGraph.HasNoCycles),
-			)
-			if dontFixCycles {
-				return fmt.Errorf("cycles detected in entitlement graph")
-			}
-			err := entitlementGraph.FixCyclesFromComponents(ctx, comps)
-			if err != nil {
-				return err
-			}
+	// Phase 2: Fix cycles in the graph (only runs once after loading completes)
+	if !entitlementGraph.HasNoCycles {
+		err := s.fixEntitlementGraphCycles(ctx, entitlementGraph)
+		if err != nil {
+			return err
 		}
 	}
 
+	// Phase 3: Run the expansion algorithm
 	err := s.expandGrantsForEntitlements(ctx)
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// loadEntitlementGraph loads one page of grants and adds expandable relationships to the graph.
+// This method handles pagination via the syncer's state machine.
+func (s *syncer) loadEntitlementGraph(ctx context.Context, graph *expand.EntitlementGraph) error {
+	l := ctxzap.Extract(ctx)
+	pageToken := s.state.PageToken(ctx)
+
+	if pageToken == "" {
+		l.Info("Expanding grants...")
+		s.handleInitialActionForStep(ctx, *s.state.Current())
+	}
+
+	resp, err := s.store.ListGrants(ctx, v2.GrantsServiceListGrantsRequest_builder{PageToken: pageToken}.Build())
+	if err != nil {
+		return err
+	}
+
+	// Handle pagination
+	if resp.GetNextPageToken() != "" {
+		err = s.state.NextPage(ctx, resp.GetNextPageToken())
+		if err != nil {
+			return err
+		}
+	} else {
+		l.Debug("Finished loading grants to expand")
+		graph.Loaded = true
+	}
+
+	// Process grants and add edges to the graph
+	for _, grant := range resp.GetList() {
+		err := s.processGrantForGraph(ctx, grant, graph)
+		if err != nil {
+			return err
+		}
+	}
+
+	if graph.Loaded {
+		l.Info("Finished loading entitlement graph", zap.Int("edges", len(graph.Edges)))
+	}
+	return nil
+}
+
+// processGrantForGraph examines a grant for expandable annotations and adds edges to the graph.
+func (s *syncer) processGrantForGraph(ctx context.Context, grant *v2.Grant, graph *expand.EntitlementGraph) error {
+	l := ctxzap.Extract(ctx)
+
+	annos := annotations.Annotations(grant.GetAnnotations())
+	expandable := &v2.GrantExpandable{}
+	_, err := annos.Pick(expandable)
+	if err != nil {
+		return err
+	}
+	if len(expandable.GetEntitlementIds()) == 0 {
+		return nil
+	}
+
+	principalID := grant.GetPrincipal().GetId()
+	if principalID == nil {
+		return fmt.Errorf("principal id was nil")
+	}
+
+	for _, srcEntitlementID := range expandable.GetEntitlementIds() {
+		l.Debug(
+			"Expandable entitlement found",
+			zap.String("src_entitlement_id", srcEntitlementID),
+			zap.String("dst_entitlement_id", grant.GetEntitlement().GetId()),
+		)
+
+		srcEntitlement, err := s.store.GetEntitlement(ctx, reader_v2.EntitlementsReaderServiceGetEntitlementRequest_builder{
+			EntitlementId: srcEntitlementID,
+		}.Build())
+		if err != nil {
+			l.Error("error fetching source entitlement",
+				zap.String("src_entitlement_id", srcEntitlementID),
+				zap.String("dst_entitlement_id", grant.GetEntitlement().GetId()),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		// The expand annotation points at entitlements by id. Those entitlements' resource should match
+		// the current grant's principal, so we don't allow expanding arbitrary entitlements.
+		sourceEntitlementResourceID := srcEntitlement.GetEntitlement().GetResource().GetId()
+		if sourceEntitlementResourceID == nil {
+			return fmt.Errorf("source entitlement resource id was nil")
+		}
+		if principalID.GetResourceType() != sourceEntitlementResourceID.GetResourceType() ||
+			principalID.GetResource() != sourceEntitlementResourceID.GetResource() {
+			l.Error(
+				"source entitlement resource id did not match grant principal id",
+				zap.String("grant_principal_id", principalID.String()),
+				zap.String("source_entitlement_resource_id", sourceEntitlementResourceID.String()))
+
+			return fmt.Errorf("source entitlement resource id did not match grant principal id")
+		}
+
+		graph.AddEntitlement(grant.GetEntitlement())
+		graph.AddEntitlement(srcEntitlement.GetEntitlement())
+		err = graph.AddEdge(ctx,
+			srcEntitlement.GetEntitlement().GetId(),
+			grant.GetEntitlement().GetId(),
+			expandable.GetShallow(),
+			expandable.GetResourceTypeIds(),
+		)
+		if err != nil {
+			return fmt.Errorf("error adding edge to graph: %w", err)
+		}
+	}
+	return nil
+}
+
+// fixEntitlementGraphCycles detects and fixes cycles in the entitlement graph.
+func (s *syncer) fixEntitlementGraphCycles(ctx context.Context, graph *expand.EntitlementGraph) error {
+	l := ctxzap.Extract(ctx)
+
+	comps, sccMetrics := graph.ComputeCyclicComponents(ctx)
+	if len(comps) == 0 {
+		graph.HasNoCycles = true
+		return nil
+	}
+	l.Warn(
+		"cycle detected in entitlement graph",
+		zap.Any("cycle", comps[0]),
+		zap.Any("scc_metrics", sccMetrics),
+	)
+	l.Debug("initial graph stats",
+		zap.Int("edges", len(graph.Edges)),
+		zap.Int("nodes", len(graph.Nodes)),
+		zap.Int("actions", len(graph.Actions)),
+		zap.Int("depth", graph.Depth),
+		zap.Bool("has_no_cycles", graph.HasNoCycles),
+	)
+	if dontFixCycles {
+		return fmt.Errorf("cycles detected in entitlement graph")
+	}
+	return graph.FixCyclesFromComponents(ctx, comps)
 }
 
 // SyncGrants fetches the grants for each resource from the connector. It iterates each resource
@@ -2707,6 +2783,19 @@ func GetExpandableAnnotation(annos annotations.Annotations) (*v2.GrantExpandable
 	return expandableAnno, nil
 }
 
+func (s *syncer) putGrantsInChunks(ctx context.Context, grants []*v2.Grant, minChunkSize int) ([]*v2.Grant, error) {
+	if len(grants) <= minChunkSize {
+		return grants, nil
+	}
+
+	err := s.store.PutGrants(ctx, grants...)
+	if err != nil {
+		return nil, fmt.Errorf("putGrantsInChunks: error putting grants: %w", err)
+	}
+
+	return make([]*v2.Grant, 0), nil
+}
+
 func (s *syncer) runGrantExpandActions(ctx context.Context) (bool, error) {
 	ctx, span := tracer.Start(ctx, "syncer.runGrantExpandActions")
 	defer span.End()
@@ -2718,7 +2807,7 @@ func (s *syncer) runGrantExpandActions(ctx context.Context) (bool, error) {
 
 	// Peek the next action on the stack
 	if len(graph.Actions) == 0 {
-		l.Debug("runGrantExpandActions: no actions") // zap.Any("graph", graph),
+		l.Debug("runGrantExpandActions: no actions")
 
 		return true, nil
 	}
@@ -2747,6 +2836,8 @@ func (s *syncer) runGrantExpandActions(ctx context.Context) (bool, error) {
 	sourceGrants, err := s.store.ListGrantsForEntitlement(ctx, reader_v2.GrantsReaderServiceListGrantsForEntitlementRequest_builder{
 		Entitlement: sourceEntitlement.GetEntitlement(),
 		PageToken:   action.PageToken,
+		// Skip this grant if it is not for a resource type we care about
+		PrincipalResourceTypeIds: action.ResourceTypeIDs,
 	}.Build())
 	if err != nil {
 		l.Error("runGrantExpandActions: error fetching source grants", zap.Error(err))
@@ -2755,25 +2846,14 @@ func (s *syncer) runGrantExpandActions(ctx context.Context) (bool, error) {
 
 	var newGrants = make([]*v2.Grant, 0)
 	for _, sourceGrant := range sourceGrants.GetList() {
-		// Skip this grant if it is not for a resource type we care about
-		if len(action.ResourceTypeIDs) > 0 {
-			relevantResourceType := slices.Contains(action.ResourceTypeIDs, sourceGrant.GetPrincipal().GetId().GetResourceType())
-
-			if !relevantResourceType {
-				continue
-			}
-		}
-
 		// If this is a shallow action, then we only want to expand grants that have no sources which indicates that it was directly assigned.
 		if action.Shallow {
+			sourcesMap := sourceGrant.GetSources().GetSources()
 			// If we have no sources, this is a direct grant
-			foundDirectGrant := len(sourceGrant.GetSources().GetSources()) == 0
+			foundDirectGrant := len(sourcesMap) == 0
 			// If the source grant has sources, then we need to see if any of them are the source entitlement itself
-			for src := range sourceGrant.GetSources().GetSources() {
-				if src == sourceEntitlement.GetEntitlement().GetId() {
-					foundDirectGrant = true
-					break
-				}
+			if sourcesMap[action.SourceEntitlementID] != nil {
+				foundDirectGrant = true
 			}
 
 			// This is not a direct grant, so skip it since we are a shallow action
@@ -2783,7 +2863,6 @@ func (s *syncer) runGrantExpandActions(ctx context.Context) (bool, error) {
 		}
 
 		// Unroll all grants for the principal on the descendant entitlement. This should, on average, be... 1.
-		descendantGrants := make([]*v2.Grant, 0, 1)
 		pageToken := ""
 		for {
 			req := reader_v2.GrantsReaderServiceListGrantsForEntitlementRequest_builder{
@@ -2798,56 +2877,69 @@ func (s *syncer) runGrantExpandActions(ctx context.Context) (bool, error) {
 				l.Error("runGrantExpandActions: error fetching descendant grants", zap.Error(err))
 				return false, fmt.Errorf("runGrantExpandActions: error fetching descendant grants: %w", err)
 			}
+			descendantGrants := resp.GetList()
 
-			descendantGrants = append(descendantGrants, resp.GetList()...)
+			// If we have no grants for the principal in the descendant entitlement, make one.
+			if pageToken == "" && resp.GetNextPageToken() == "" && len(descendantGrants) == 0 {
+				// TODO(morgabra): This is kinda gnarly, grant ID won't have any special meaning.
+				// FIXME(morgabra): We should probably conflict check with grant id?
+				descendantGrant, err := s.newExpandedGrant(ctx, descendantEntitlement.GetEntitlement(), sourceGrant.GetPrincipal(), action.SourceEntitlementID)
+				if err != nil {
+					l.Error("runGrantExpandActions: error creating new grant", zap.Error(err))
+					return false, fmt.Errorf("runGrantExpandActions: error creating new grant: %w", err)
+				}
+				newGrants = append(newGrants, descendantGrant)
+				newGrants, err = s.putGrantsInChunks(ctx, newGrants, 10000)
+				if err != nil {
+					l.Error("runGrantExpandActions: error updating descendant grants", zap.Error(err))
+					return false, fmt.Errorf("runGrantExpandActions: error updating descendant grants: %w", err)
+				}
+				break
+			}
+
+			// Add the source entitlement as a source to all descendant grants.
+			grantsToUpdate := make([]*v2.Grant, 0)
+			for _, descendantGrant := range descendantGrants {
+				sourcesMap := descendantGrant.GetSources().GetSources()
+				if sourcesMap == nil {
+					sourcesMap = make(map[string]*v2.GrantSources_GrantSource)
+				}
+
+				updated := false
+
+				if len(sourcesMap) == 0 {
+					// If we are already granted this entitlement, make sure to add ourselves as a source.
+					sourcesMap[action.DescendantEntitlementID] = &v2.GrantSources_GrantSource{}
+					updated = true
+				}
+				// Include the source grant as a source.
+				if sourcesMap[action.SourceEntitlementID] == nil {
+					sourcesMap[action.SourceEntitlementID] = &v2.GrantSources_GrantSource{}
+					updated = true
+				}
+
+				if updated {
+					sources := v2.GrantSources_builder{Sources: sourcesMap}.Build()
+					descendantGrant.SetSources(sources)
+					grantsToUpdate = append(grantsToUpdate, descendantGrant)
+				}
+			}
+			newGrants = append(newGrants, grantsToUpdate...)
+
+			newGrants, err = s.putGrantsInChunks(ctx, newGrants, 10000)
+			if err != nil {
+				l.Error("runGrantExpandActions: error updating descendant grants", zap.Error(err))
+				return false, fmt.Errorf("runGrantExpandActions: error updating descendant grants: %w", err)
+			}
+
 			pageToken = resp.GetNextPageToken()
 			if pageToken == "" {
 				break
 			}
 		}
-
-		// If we have no grants for the principal in the descendant entitlement, make one.
-		directGrant := true
-		if len(descendantGrants) == 0 {
-			directGrant = false
-			// TODO(morgabra): This is kinda gnarly, grant ID won't have any special meaning.
-			// FIXME(morgabra): We should probably conflict check with grant id?
-			descendantGrant, err := s.newExpandedGrant(ctx, descendantEntitlement.GetEntitlement(), sourceGrant.GetPrincipal())
-			if err != nil {
-				l.Error("runGrantExpandActions: error creating new grant", zap.Error(err))
-				return false, fmt.Errorf("runGrantExpandActions: error creating new grant: %w", err)
-			}
-			descendantGrants = append(descendantGrants, descendantGrant)
-			l.Debug(
-				"runGrantExpandActions: created new grant for expansion",
-				zap.String("grant_id", descendantGrant.GetId()),
-			)
-		}
-
-		// Add the source entitlement as a source to all descendant grants.
-		for _, descendantGrant := range descendantGrants {
-			sources := descendantGrant.GetSources()
-			if sources == nil {
-				sources = &v2.GrantSources{}
-				descendantGrant.SetSources(sources)
-			}
-			sourcesMap := sources.GetSources()
-			if sourcesMap == nil {
-				sourcesMap = make(map[string]*v2.GrantSources_GrantSource)
-				sources.SetSources(sourcesMap)
-			}
-
-			if directGrant && len(sources.GetSources()) == 0 {
-				// If we are already granted this entitlement, make sure to add ourselves as a source.
-				sourcesMap[descendantGrant.GetEntitlement().GetId()] = &v2.GrantSources_GrantSource{}
-			}
-			// Include the source grant as a source.
-			sourcesMap[sourceGrant.GetEntitlement().GetId()] = &v2.GrantSources_GrantSource{}
-		}
-		newGrants = append(newGrants, descendantGrants...)
 	}
 
-	err = s.store.PutGrants(ctx, newGrants...)
+	_, err = s.putGrantsInChunks(ctx, newGrants, 0)
 	if err != nil {
 		l.Error("runGrantExpandActions: error updating descendant grants", zap.Error(err))
 		return false, fmt.Errorf("runGrantExpandActions: error updating descendant grants: %w", err)
@@ -2862,7 +2954,7 @@ func (s *syncer) runGrantExpandActions(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-func (s *syncer) newExpandedGrant(_ context.Context, descEntitlement *v2.Entitlement, principal *v2.Resource) (*v2.Grant, error) {
+func (s *syncer) newExpandedGrant(_ context.Context, descEntitlement *v2.Entitlement, principal *v2.Resource, sourceEntitlementID string) (*v2.Grant, error) {
 	enResource := descEntitlement.GetResource()
 	if enResource == nil {
 		return nil, fmt.Errorf("newExpandedGrant: entitlement has no resource")
@@ -2876,10 +2968,20 @@ func (s *syncer) newExpandedGrant(_ context.Context, descEntitlement *v2.Entitle
 	var annos annotations.Annotations
 	annos.Update(&v2.GrantImmutable{})
 
+	var sources *v2.GrantSources
+	if sourceEntitlementID != "" {
+		sources = &v2.GrantSources{
+			Sources: map[string]*v2.GrantSources_GrantSource{
+				sourceEntitlementID: {},
+			},
+		}
+	}
+
 	grant := v2.Grant_builder{
 		Id:          fmt.Sprintf("%s:%s:%s", descEntitlement.GetId(), principal.GetId().GetResourceType(), principal.GetId().GetResource()),
 		Entitlement: descEntitlement,
 		Principal:   principal,
+		Sources:     sources,
 		Annotations: annos,
 	}.Build()
 
@@ -2895,7 +2997,7 @@ func (s *syncer) expandGrantsForEntitlements(ctx context.Context) error {
 
 	graph := s.state.EntitlementGraph(ctx)
 	l = l.With(zap.Int("depth", graph.Depth))
-	l.Debug("expandGrantsForEntitlements: start") // zap.Any("graph", graph)
+	l.Debug("expandGrantsForEntitlements: start")
 
 	s.counts.LogExpandProgress(ctx, graph.Actions)
 
@@ -2925,31 +3027,15 @@ func (s *syncer) expandGrantsForEntitlements(ctx context.Context) error {
 	if int64(graph.Depth) > maxDepth {
 		l.Error(
 			"expandGrantsForEntitlements: exceeded max depth",
-			// zap.Any("graph", graph),
 			zap.Int64("max_depth", maxDepth),
 		)
 		s.state.FinishAction(ctx)
 		return fmt.Errorf("expandGrantsForEntitlements: exceeded max depth (%d)", maxDepth)
 	}
 
-	// TODO(morgabra) Yield here after some amount of work?
 	// traverse edges or call some sort of getEntitlements
-	for _, sourceEntitlementID := range graph.GetEntitlements() {
-		// We've already expanded this entitlement, so skip it.
-		if graph.IsEntitlementExpanded(sourceEntitlementID) {
-			continue
-		}
-
-		// We have ancestors who have not been expanded yet, so we can't expand ourselves.
-		if graph.HasUnexpandedAncestors(sourceEntitlementID) {
-			l.Debug("expandGrantsForEntitlements: skipping source entitlement because it has unexpanded ancestors", zap.String("source_entitlement_id", sourceEntitlementID))
-			continue
-		}
-
-		for descendantEntitlementID, grantInfo := range graph.GetDescendantEntitlements(sourceEntitlementID) {
-			if grantInfo.IsExpanded {
-				continue
-			}
+	for sourceEntitlementID := range graph.GetExpandableEntitlements(ctx) {
+		for descendantEntitlementID, grantInfo := range graph.GetExpandableDescendantEntitlements(ctx, sourceEntitlementID) {
 			graph.Actions = append(graph.Actions, &expand.EntitlementGraphAction{
 				SourceEntitlementID:     sourceEntitlementID,
 				DescendantEntitlementID: descendantEntitlementID,
@@ -2961,13 +3047,13 @@ func (s *syncer) expandGrantsForEntitlements(ctx context.Context) error {
 	}
 
 	if graph.IsExpanded() {
-		l.Debug("expandGrantsForEntitlements: graph is expanded") // zap.Any("graph", graph)
+		l.Debug("expandGrantsForEntitlements: graph is expanded")
 		s.state.FinishAction(ctx)
 		return nil
 	}
 
 	graph.Depth++
-	l.Debug("expandGrantsForEntitlements: graph is not expanded") // zap.Any("graph", graph)
+	l.Debug("expandGrantsForEntitlements: graph is not expanded")
 	return nil
 }
 
@@ -3101,10 +3187,10 @@ func WithExternalResourceEntitlementIdFilter(entitlementId string) SyncOpt {
 	}
 }
 
-func WithTargetedSyncResourceIDs(resourceIDs []string) SyncOpt {
+func WithTargetedSyncResources(resources []*v2.Resource) SyncOpt {
 	return func(s *syncer) {
-		s.targetedSyncResourceIDs = resourceIDs
-		if len(resourceIDs) > 0 {
+		s.targetedSyncResources = resources
+		if len(resources) > 0 {
 			s.syncType = connectorstore.SyncTypePartial
 			return
 		}
@@ -3166,11 +3252,12 @@ func WithSkipGrants(skip bool) SyncOpt {
 // NewSyncer returns a new syncer object.
 func NewSyncer(ctx context.Context, c types.ConnectorClient, opts ...SyncOpt) (Syncer, error) {
 	s := &syncer{
-		connector:             c,
-		skipEGForResourceType: make(map[string]bool),
-		resourceTypeTraits:    make(map[string][]v2.ResourceType_Trait),
-		counts:                NewProgressCounts(),
-		syncType:              connectorstore.SyncTypeFull,
+		connector:                       c,
+		skipEGForResourceType:           make(map[string]bool),
+		skipEntitlementsForResourceType: make(map[string]bool),
+		resourceTypeTraits:              make(map[string][]v2.ResourceType_Trait),
+		counts:                          NewProgressCounts(),
+		syncType:                        connectorstore.SyncTypeFull,
 	}
 
 	for _, o := range opts {

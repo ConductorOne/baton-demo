@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/doug-martin/goqu/v9"
-	"google.golang.org/protobuf/proto"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	reader_v2 "github.com/conductorone/baton-sdk/pb/c1/reader/v2"
@@ -34,6 +33,8 @@ create unique index if not exists %s on %s (external_id, sync_id);`
 
 var grants = (*grantsTable)(nil)
 
+var _ tableDescriptor = (*grantsTable)(nil)
+
 type grantsTable struct{}
 
 func (r *grantsTable) Version() string {
@@ -44,8 +45,8 @@ func (r *grantsTable) Name() string {
 	return fmt.Sprintf("v%s_%s", r.Version(), grantsTableName)
 }
 
-func (r *grantsTable) Schema() (string, []interface{}) {
-	return grantsTableSchema, []interface{}{
+func (r *grantsTable) Schema() (string, []any) {
+	return grantsTableSchema, []any{
 		r.Name(),
 		fmt.Sprintf("idx_grants_resource_type_id_resource_id_v%s", r.Version()),
 		r.Name(),
@@ -62,23 +63,36 @@ func (r *grantsTable) Migrations(ctx context.Context, db *goqu.Database) error {
 	return nil
 }
 
+// DropGrantIndexes drops the indexes on the grants table.
+// This should only be called when compacting the grants table.
+// These indexes are re-created when we open the database again.
+func (c *C1File) DropGrantIndexes(ctx context.Context) error {
+	ctx, span := tracer.Start(ctx, "C1File.DropGrantsIndexes")
+	defer span.End()
+
+	indexes := []string{
+		fmt.Sprintf("idx_grants_resource_type_id_resource_id_v%s", grants.Version()),
+		fmt.Sprintf("idx_grants_principal_id_v%s", grants.Version()),
+		fmt.Sprintf("idx_grants_entitlement_id_principal_id_v%s", grants.Version()),
+		fmt.Sprintf("idx_grants_external_sync_v%s", grants.Version()),
+	}
+
+	for _, index := range indexes {
+		_, err := c.db.ExecContext(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %s", index))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *C1File) ListGrants(ctx context.Context, request *v2.GrantsServiceListGrantsRequest) (*v2.GrantsServiceListGrantsResponse, error) {
 	ctx, span := tracer.Start(ctx, "C1File.ListGrants")
 	defer span.End()
 
-	objs, nextPageToken, err := c.listConnectorObjects(ctx, grants.Name(), request)
+	ret, nextPageToken, err := listConnectorObjects(ctx, c, grants.Name(), request, func() *v2.Grant { return &v2.Grant{} })
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants: %w", err)
-	}
-
-	ret := make([]*v2.Grant, 0, len(objs))
-	for _, o := range objs {
-		g := &v2.Grant{}
-		err = proto.Unmarshal(o, g)
-		if err != nil {
-			return nil, err
-		}
-		ret = append(ret, g)
 	}
 
 	return v2.GrantsServiceListGrantsResponse_builder{
@@ -112,20 +126,9 @@ func (c *C1File) ListGrantsForEntitlement(
 ) (*reader_v2.GrantsReaderServiceListGrantsForEntitlementResponse, error) {
 	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForEntitlement")
 	defer span.End()
-
-	objs, nextPageToken, err := c.listConnectorObjects(ctx, grants.Name(), request)
+	ret, nextPageToken, err := listConnectorObjects(ctx, c, grants.Name(), request, func() *v2.Grant { return &v2.Grant{} })
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants for entitlement '%s': %w", request.GetEntitlement().GetId(), err)
-	}
-
-	ret := make([]*v2.Grant, 0, len(objs))
-	for _, o := range objs {
-		en := &v2.Grant{}
-		err = proto.Unmarshal(o, en)
-		if err != nil {
-			return nil, err
-		}
-		ret = append(ret, en)
 	}
 
 	return reader_v2.GrantsReaderServiceListGrantsForEntitlementResponse_builder{
@@ -141,19 +144,9 @@ func (c *C1File) ListGrantsForPrincipal(
 	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForPrincipal")
 	defer span.End()
 
-	objs, nextPageToken, err := c.listConnectorObjects(ctx, grants.Name(), request)
+	ret, nextPageToken, err := listConnectorObjects(ctx, c, grants.Name(), request, func() *v2.Grant { return &v2.Grant{} })
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants for principal '%s': %w", request.GetPrincipalId(), err)
-	}
-
-	ret := make([]*v2.Grant, 0, len(objs))
-	for _, o := range objs {
-		en := &v2.Grant{}
-		err = proto.Unmarshal(o, en)
-		if err != nil {
-			return nil, err
-		}
-		ret = append(ret, en)
 	}
 
 	return reader_v2.GrantsReaderServiceListGrantsForEntitlementResponse_builder{
@@ -169,19 +162,9 @@ func (c *C1File) ListGrantsForResourceType(
 	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForResourceType")
 	defer span.End()
 
-	objs, nextPageToken, err := c.listConnectorObjects(ctx, grants.Name(), request)
+	ret, nextPageToken, err := listConnectorObjects(ctx, c, grants.Name(), request, func() *v2.Grant { return &v2.Grant{} })
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants for resource type '%s': %w", request.GetResourceTypeId(), err)
-	}
-
-	ret := make([]*v2.Grant, 0, len(objs))
-	for _, o := range objs {
-		en := &v2.Grant{}
-		err = proto.Unmarshal(o, en)
-		if err != nil {
-			return nil, err
-		}
-		ret = append(ret, en)
 	}
 
 	return reader_v2.GrantsReaderServiceListGrantsForResourceTypeResponse_builder{
@@ -207,6 +190,10 @@ func (c *C1File) PutGrantsIfNewer(ctx context.Context, bulkGrants ...*v2.Grant) 
 type grantPutFunc func(context.Context, *C1File, string, func(m *v2.Grant) (goqu.Record, error), ...*v2.Grant) error
 
 func (c *C1File) putGrantsInternal(ctx context.Context, f grantPutFunc, bulkGrants ...*v2.Grant) error {
+	if c.readOnly {
+		return ErrReadOnly
+	}
+
 	err := f(ctx, c, grants.Name(),
 		func(grant *v2.Grant) (goqu.Record, error) {
 			return goqu.Record{
