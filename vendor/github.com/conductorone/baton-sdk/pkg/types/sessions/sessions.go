@@ -4,11 +4,18 @@ import (
 	"context"
 )
 
+const MaxKeysPerRequest = 100
+
+// The default gRPC message size limit is 4MB (we subtract 30KB for general overhead, which is overkill).
+// Unfortunately, this layer has to be aware of the size limit to avoid exceeding the size limit
+// because the client does not know the size of the items it requests.
+const MaxSessionStoreSizeLimit = 4163584
+
 type SessionStoreKey struct{}
 
 type SessionStore interface {
 	Get(ctx context.Context, key string, opt ...SessionStoreOption) ([]byte, bool, error)
-	GetMany(ctx context.Context, keys []string, opt ...SessionStoreOption) (map[string][]byte, error)
+	GetMany(ctx context.Context, keys []string, opt ...SessionStoreOption) (map[string][]byte, []string, error)
 	Set(ctx context.Context, key string, value []byte, opt ...SessionStoreOption) error
 	SetMany(ctx context.Context, values map[string][]byte, opt ...SessionStoreOption) error
 	Delete(ctx context.Context, key string, opt ...SessionStoreOption) error
