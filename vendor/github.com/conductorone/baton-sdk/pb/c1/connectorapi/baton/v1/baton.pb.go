@@ -2936,6 +2936,7 @@ type Task_CreateAccountTask struct {
 	AccountInfo       *v2.AccountInfo        `protobuf:"bytes,1,opt,name=account_info,json=accountInfo,proto3" json:"account_info,omitempty"`
 	CredentialOptions *v2.CredentialOptions  `protobuf:"bytes,2,opt,name=credential_options,json=credentialOptions,proto3" json:"credential_options,omitempty"`
 	EncryptionConfigs []*v2.EncryptionConfig `protobuf:"bytes,3,rep,name=encryption_configs,json=encryptionConfigs,proto3" json:"encryption_configs,omitempty"`
+	ResourceTypeId    string                 `protobuf:"bytes,4,opt,name=resource_type_id,json=resourceTypeId,proto3" json:"resource_type_id,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -2986,6 +2987,13 @@ func (x *Task_CreateAccountTask) GetEncryptionConfigs() []*v2.EncryptionConfig {
 	return nil
 }
 
+func (x *Task_CreateAccountTask) GetResourceTypeId() string {
+	if x != nil {
+		return x.ResourceTypeId
+	}
+	return ""
+}
+
 func (x *Task_CreateAccountTask) SetAccountInfo(v *v2.AccountInfo) {
 	x.AccountInfo = v
 }
@@ -2996,6 +3004,10 @@ func (x *Task_CreateAccountTask) SetCredentialOptions(v *v2.CredentialOptions) {
 
 func (x *Task_CreateAccountTask) SetEncryptionConfigs(v []*v2.EncryptionConfig) {
 	x.EncryptionConfigs = v
+}
+
+func (x *Task_CreateAccountTask) SetResourceTypeId(v string) {
+	x.ResourceTypeId = v
 }
 
 func (x *Task_CreateAccountTask) HasAccountInfo() bool {
@@ -3026,6 +3038,7 @@ type Task_CreateAccountTask_builder struct {
 	AccountInfo       *v2.AccountInfo
 	CredentialOptions *v2.CredentialOptions
 	EncryptionConfigs []*v2.EncryptionConfig
+	ResourceTypeId    string
 }
 
 func (b0 Task_CreateAccountTask_builder) Build() *Task_CreateAccountTask {
@@ -3035,6 +3048,7 @@ func (b0 Task_CreateAccountTask_builder) Build() *Task_CreateAccountTask {
 	x.AccountInfo = b.AccountInfo
 	x.CredentialOptions = b.CredentialOptions
 	x.EncryptionConfigs = b.EncryptionConfigs
+	x.ResourceTypeId = b.ResourceTypeId
 	return m0
 }
 
@@ -3656,10 +3670,12 @@ func (b0 Task_GetTicketTask_builder) Build() *Task_GetTicketTask {
 }
 
 type Task_ActionListSchemasTask struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Annotations   []*anypb.Any           `protobuf:"bytes,1,rep,name=annotations,proto3" json:"annotations,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"hybrid.v1"`
+	Annotations []*anypb.Any           `protobuf:"bytes,1,rep,name=annotations,proto3" json:"annotations,omitempty"`
+	// Optional: filter to only return actions for a specific resource type
+	ResourceTypeId string `protobuf:"bytes,2,opt,name=resource_type_id,json=resourceTypeId,proto3" json:"resource_type_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Task_ActionListSchemasTask) Reset() {
@@ -3694,14 +3710,27 @@ func (x *Task_ActionListSchemasTask) GetAnnotations() []*anypb.Any {
 	return nil
 }
 
+func (x *Task_ActionListSchemasTask) GetResourceTypeId() string {
+	if x != nil {
+		return x.ResourceTypeId
+	}
+	return ""
+}
+
 func (x *Task_ActionListSchemasTask) SetAnnotations(v []*anypb.Any) {
 	x.Annotations = v
+}
+
+func (x *Task_ActionListSchemasTask) SetResourceTypeId(v string) {
+	x.ResourceTypeId = v
 }
 
 type Task_ActionListSchemasTask_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	Annotations []*anypb.Any
+	// Optional: filter to only return actions for a specific resource type
+	ResourceTypeId string
 }
 
 func (b0 Task_ActionListSchemasTask_builder) Build() *Task_ActionListSchemasTask {
@@ -3709,6 +3738,7 @@ func (b0 Task_ActionListSchemasTask_builder) Build() *Task_ActionListSchemasTask
 	b, x := &b0, m0
 	_, _ = b, x
 	x.Annotations = b.Annotations
+	x.ResourceTypeId = b.ResourceTypeId
 	return m0
 }
 
@@ -3784,12 +3814,14 @@ func (b0 Task_ActionGetSchemaTask_builder) Build() *Task_ActionGetSchemaTask {
 }
 
 type Task_ActionInvokeTask struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Args          *structpb.Struct       `protobuf:"bytes,2,opt,name=args,proto3" json:"args,omitempty"`
-	Annotations   []*anypb.Any           `protobuf:"bytes,3,rep,name=annotations,proto3" json:"annotations,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"hybrid.v1"`
+	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Args        *structpb.Struct       `protobuf:"bytes,2,opt,name=args,proto3" json:"args,omitempty"`
+	Annotations []*anypb.Any           `protobuf:"bytes,3,rep,name=annotations,proto3" json:"annotations,omitempty"`
+	// Optional: if set, invokes a resource-scoped action
+	ResourceTypeId string `protobuf:"bytes,4,opt,name=resource_type_id,json=resourceTypeId,proto3" json:"resource_type_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Task_ActionInvokeTask) Reset() {
@@ -3838,6 +3870,13 @@ func (x *Task_ActionInvokeTask) GetAnnotations() []*anypb.Any {
 	return nil
 }
 
+func (x *Task_ActionInvokeTask) GetResourceTypeId() string {
+	if x != nil {
+		return x.ResourceTypeId
+	}
+	return ""
+}
+
 func (x *Task_ActionInvokeTask) SetName(v string) {
 	x.Name = v
 }
@@ -3848,6 +3887,10 @@ func (x *Task_ActionInvokeTask) SetArgs(v *structpb.Struct) {
 
 func (x *Task_ActionInvokeTask) SetAnnotations(v []*anypb.Any) {
 	x.Annotations = v
+}
+
+func (x *Task_ActionInvokeTask) SetResourceTypeId(v string) {
+	x.ResourceTypeId = v
 }
 
 func (x *Task_ActionInvokeTask) HasArgs() bool {
@@ -3867,6 +3910,8 @@ type Task_ActionInvokeTask_builder struct {
 	Name        string
 	Args        *structpb.Struct
 	Annotations []*anypb.Any
+	// Optional: if set, invokes a resource-scoped action
+	ResourceTypeId string
 }
 
 func (b0 Task_ActionInvokeTask_builder) Build() *Task_ActionInvokeTask {
@@ -3876,6 +3921,7 @@ func (b0 Task_ActionInvokeTask_builder) Build() *Task_ActionInvokeTask {
 	x.Name = b.Name
 	x.Args = b.Args
 	x.Annotations = b.Annotations
+	x.ResourceTypeId = b.ResourceTypeId
 	return m0
 }
 
@@ -4840,7 +4886,7 @@ var File_c1_connectorapi_baton_v1_baton_proto protoreflect.FileDescriptor
 
 const file_c1_connectorapi_baton_v1_baton_proto_rawDesc = "" +
 	"\n" +
-	"$c1/connectorapi/baton/v1/baton.proto\x12\x18c1.connectorapi.baton.v1\x1a\x1fc1/connector/v2/connector.proto\x1a!c1/connector/v2/entitlement.proto\x1a\x1bc1/connector/v2/grant.proto\x1a\x1ec1/connector/v2/resource.proto\x1a\x1cc1/connector/v2/ticket.proto\x1a\x19google/protobuf/any.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17google/rpc/status.proto\x1a\x17validate/validate.proto\"\xac(\n" +
+	"$c1/connectorapi/baton/v1/baton.proto\x12\x18c1.connectorapi.baton.v1\x1a\x1fc1/connector/v2/connector.proto\x1a!c1/connector/v2/entitlement.proto\x1a\x1bc1/connector/v2/grant.proto\x1a\x1ec1/connector/v2/resource.proto\x1a\x1cc1/connector/v2/ticket.proto\x1a\x19google/protobuf/any.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17google/rpc/status.proto\x1a\x17validate/validate.proto\"\xb9)\n" +
 	"\x04Task\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12=\n" +
 	"\x06status\x18\x02 \x01(\x0e2%.c1.connectorapi.baton.v1.Task.StatusR\x06status\x12=\n" +
@@ -4888,11 +4934,13 @@ const file_c1_connectorapi_baton_v1_baton_proto_rawDesc = "" +
 	"\n" +
 	"RevokeTask\x12,\n" +
 	"\x05grant\x18\x01 \x01(\v2\x16.c1.connector.v2.GrantR\x05grant\x126\n" +
-	"\vannotations\x18\x02 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1a\xf9\x01\n" +
+	"\vannotations\x18\x02 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1a\xb2\x02\n" +
 	"\x11CreateAccountTask\x12?\n" +
 	"\faccount_info\x18\x01 \x01(\v2\x1c.c1.connector.v2.AccountInfoR\vaccountInfo\x12Q\n" +
 	"\x12credential_options\x18\x02 \x01(\v2\".c1.connector.v2.CredentialOptionsR\x11credentialOptions\x12P\n" +
-	"\x12encryption_configs\x18\x03 \x03(\v2!.c1.connector.v2.EncryptionConfigR\x11encryptionConfigs\x1aK\n" +
+	"\x12encryption_configs\x18\x03 \x03(\v2!.c1.connector.v2.EncryptionConfigR\x11encryptionConfigs\x127\n" +
+	"\x10resource_type_id\x18\x04 \x01(\tB\r\xfaB\n" +
+	"r\b \x01(\x80\b\xd0\x01\x01R\x0eresourceTypeId\x1aK\n" +
 	"\x12CreateResourceTask\x125\n" +
 	"\bresource\x18\x01 \x01(\v2\x19.c1.connector.v2.ResourceR\bresource\x1a\x9d\x01\n" +
 	"\x12DeleteResourceTask\x12<\n" +
@@ -4916,16 +4964,18 @@ const file_c1_connectorapi_baton_v1_baton_proto_rawDesc = "" +
 	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1ad\n" +
 	"\rGetTicketTask\x12\x1b\n" +
 	"\tticket_id\x18\x01 \x01(\tR\bticketId\x126\n" +
-	"\vannotations\x18\x02 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1aO\n" +
+	"\vannotations\x18\x02 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1ay\n" +
 	"\x15ActionListSchemasTask\x126\n" +
-	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1aa\n" +
+	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x12(\n" +
+	"\x10resource_type_id\x18\x02 \x01(\tR\x0eresourceTypeId\x1aa\n" +
 	"\x13ActionGetSchemaTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x126\n" +
-	"\vannotations\x18\x02 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1a\x8b\x01\n" +
+	"\vannotations\x18\x02 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1a\xb5\x01\n" +
 	"\x10ActionInvokeTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12+\n" +
 	"\x04args\x18\x02 \x01(\v2\x17.google.protobuf.StructR\x04args\x126\n" +
-	"\vannotations\x18\x03 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1an\n" +
+	"\vannotations\x18\x03 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x12(\n" +
+	"\x10resource_type_id\x18\x04 \x01(\tR\x0eresourceTypeId\x1an\n" +
 	"\x10ActionStatusTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x126\n" +

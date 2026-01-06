@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/doug-martin/goqu/v9"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -45,6 +46,11 @@ type C1File struct {
 	pragmas            []pragma
 	readOnly           bool
 	encoderConcurrency int
+
+	// Cached sync run for listConnectorObjects (avoids N+1 queries)
+	cachedViewSyncRun *syncRun
+	cachedViewSyncMu  sync.Mutex
+	cachedViewSyncErr error
 
 	// Slow query tracking
 	slowQueryLogTimes     map[string]time.Time
@@ -182,7 +188,7 @@ func NewC1ZFile(ctx context.Context, outputFilePath string, opts ...C1ZOption) (
 		opt(options)
 	}
 
-	dbFilePath, err := loadC1z(outputFilePath, options.tmpDir, options.decoderOptions...)
+	dbFilePath, _, err := decompressC1z(outputFilePath, options.tmpDir, options.decoderOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -220,11 +226,43 @@ func cleanupDbDir(dbFilePath string, err error) error {
 var ErrReadOnly = errors.New("c1z: read only mode")
 
 // Close ensures that the sqlite database is flushed to disk, and if any changes were made we update the original database
-// with our changes.
+// with our changes. It uses context.Background() for the WAL checkpoint operation.
+// Use CloseContext to pass a specific context.
 func (c *C1File) Close() error {
+	return c.CloseContext(context.Background())
+}
+
+// CloseContext ensures that the sqlite database is flushed to disk, and if any changes were made we update the original database
+// with our changes. The provided context is used for the WAL checkpoint operation.
+func (c *C1File) CloseContext(ctx context.Context) error {
 	var err error
 
 	if c.rawDb != nil {
+		// CRITICAL: Force a full WAL checkpoint before closing the database.
+		// This ensures all WAL data is written back to the main database file
+		// and the writes are synced to disk. Without this, on filesystems with
+		// aggressive caching (like ZFS with large ARC), the subsequent saveC1z()
+		// read could see stale data because the checkpoint writes may still be
+		// in kernel buffers.
+		//
+		// TRUNCATE mode: checkpoint as many frames as possible, then truncate
+		// the WAL file to zero bytes. This guarantees all data is in the main
+		// database file before we read it for compression.
+		if c.dbUpdated && !c.readOnly {
+			_, err = c.rawDb.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+			if err != nil {
+				// Checkpoint failed - log and continue. The subsequent Close()
+				// will attempt a passive checkpoint. If that also fails, we'll
+				// get an error from Close() or saveC1z() will read stale data.
+				// We log here for debugging but don't fail because:
+				// 1. Close() will still attempt its own checkpoint
+				// 2. The error might be transient (busy)
+				zap.L().Warn("WAL checkpoint failed before close",
+					zap.Error(err),
+					zap.String("db_path", c.dbFilePath))
+			}
+		}
+
 		err = c.rawDb.Close()
 		if err != nil {
 			return cleanupDbDir(c.dbFilePath, err)
@@ -260,6 +298,19 @@ func (c *C1File) init(ctx context.Context) error {
 	err = c.InitTables(ctx)
 	if err != nil {
 		return err
+	}
+
+	if c.readOnly {
+		// Disable journaling in read only mode, since we're not writing to the database.
+		_, err = c.db.ExecContext(ctx, "PRAGMA journal_mode = OFF")
+		if err != nil {
+			return err
+		}
+		// Disable synchronous writes in read only mode, since we're not writing to the database.
+		_, err = c.db.ExecContext(ctx, "PRAGMA synchronous = OFF")
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, pragma := range c.pragmas {
