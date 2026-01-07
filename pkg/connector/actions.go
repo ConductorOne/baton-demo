@@ -12,7 +12,6 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -152,37 +151,35 @@ var updateUserAttrsActionSchema = &v2.BatonActionSchema{
 	},
 }
 
-func (d *Demo) RegisterActionManager(ctx context.Context) (connectorbuilder.CustomActionManager, error) {
-	actionManager := actions.NewActionManager(ctx)
-
+func (d *Demo) GlobalActions(ctx context.Context, registry actions.ActionRegistry) error {
 	// addNumbers action
-	err := actionManager.RegisterAction(ctx, addNumbers.Name, addNumbers, d.addNumbers)
+	err := registry.Register(ctx, addNumbers, d.addNumbers)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// helloIn1Minute action
-	err = actionManager.RegisterAction(ctx, helloIn1Minute.Name, helloIn1Minute, d.helloIn1Minute)
+	err = registry.Register(ctx, helloIn1Minute, d.helloIn1Minute)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	err = actionManager.RegisterAction(ctx, enableAccount.Name, enableAccount, d.enableAccount)
+	err = registry.Register(ctx, enableAccount, d.enableAccount)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	err = actionManager.RegisterAction(ctx, disableAccount.Name, disableAccount, d.disableAccount)
+	err = registry.Register(ctx, disableAccount, d.disableAccount)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	err = actionManager.RegisterAction(ctx, updateUserAttrsActionSchema.Name, updateUserAttrsActionSchema, d.updateUserAttributes)
+	err = registry.Register(ctx, updateUserAttrsActionSchema, d.updateUserAttributes)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return actionManager, nil
+	return nil
 }
 
 func (d *Demo) addNumbers(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {

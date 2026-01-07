@@ -848,6 +848,11 @@ func (s *syncer) getSubResources(ctx context.Context, parent *v2.Resource) error
 	ctx, span := tracer.Start(ctx, "syncer.getSubResources")
 	defer span.End()
 
+	syncResourceTypeMap := make(map[string]bool)
+	for _, rt := range s.syncResourceTypes {
+		syncResourceTypeMap[rt] = true
+	}
+
 	for _, a := range parent.GetAnnotations() {
 		if a.MessageIs((*v2.ChildResourceType)(nil)) {
 			crt := &v2.ChildResourceType{}
@@ -855,7 +860,11 @@ func (s *syncer) getSubResources(ctx context.Context, parent *v2.Resource) error
 			if err != nil {
 				return err
 			}
-
+			if len(s.syncResourceTypes) > 0 {
+				if shouldSync := syncResourceTypeMap[crt.GetResourceTypeId()]; !shouldSync {
+					continue
+				}
+			}
 			childAction := Action{
 				Op:                   SyncResourcesOp,
 				ResourceTypeID:       crt.GetResourceTypeId(),
@@ -1649,11 +1658,40 @@ func (s *syncer) loadEntitlementGraph(ctx context.Context, graph *expand.Entitle
 	}
 
 	// Process grants and add edges to the graph
+	updatedGrants := make([]*v2.Grant, 0)
 	for _, grant := range resp.GetList() {
 		err := s.processGrantForGraph(ctx, grant, graph)
 		if err != nil {
 			return err
 		}
+
+		// Remove expandable annotation from descendant grant now that we've added it to the graph.
+		// That way if this sync is part of a compaction, expanding grants at the end of compaction won't redo work.
+		newAnnos := make(annotations.Annotations, 0)
+		updated := false
+		for _, anno := range grant.GetAnnotations() {
+			if anno.MessageIs(&v2.GrantExpandable{}) {
+				updated = true
+			} else {
+				newAnnos = append(newAnnos, anno)
+			}
+		}
+		if !updated {
+			continue
+		}
+
+		grant.SetAnnotations(newAnnos)
+		l.Debug("removed expandable annotation from grant", zap.String("grant_id", grant.GetId()))
+		updatedGrants = append(updatedGrants, grant)
+		updatedGrants, err = expand.PutGrantsInChunks(ctx, s.store, updatedGrants, 10000)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = expand.PutGrantsInChunks(ctx, s.store, updatedGrants, 0)
+	if err != nil {
+		return err
 	}
 
 	if graph.Loaded {

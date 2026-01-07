@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/metrics"
@@ -67,8 +68,6 @@ type builder struct {
 	metadataProvider        MetadataProvider
 	validateProvider        ValidateProvider
 	ticketManager           TicketManagerLimited
-	accountManager          AccountManagerLimited
-	actionManager           CustomActionManager
 	resourceSyncers         map[string]ResourceSyncerV2
 	resourceProvisioners    map[string]ResourceProvisionerV2Limited
 	resourceManagers        map[string]ResourceManagerV2Limited
@@ -76,7 +75,8 @@ type builder struct {
 	resourceTargetedSyncers map[string]ResourceTargetedSyncerLimited
 	credentialManagers      map[string]CredentialManagerLimited
 	eventFeeds              map[string]EventFeed
-	accountManagers         map[string]AccountManagerLimited // NOTE(kans): currently unused
+	accountManagers         map[string]AccountManagerLimited
+	actionManager           ActionManager // Unified action manager for all actions
 }
 
 // NewConnector creates a new ConnectorServer for a new resource.
@@ -97,12 +97,13 @@ func NewConnector(ctx context.Context, in interface{}, opts ...Opt) (types.Conne
 	clientSecretValue := ctx.Value(crypto.ContextClientSecretKey)
 	clientSecretJWK, _ := clientSecretValue.(*jose.JSONWebKey)
 
+	// Create the action manager (concrete type for registration, stored as interface for dispatch)
+	actionMgr := actions.NewActionManager(ctx)
+
 	b := &builder{
 		metadataProvider:        nil,
 		validateProvider:        nil,
 		ticketManager:           nil,
-		accountManager:          nil,
-		actionManager:           nil,
 		nowFunc:                 time.Now,
 		clientSecret:            clientSecretJWK,
 		resourceSyncers:         make(map[string]ResourceSyncerV2),
@@ -113,6 +114,7 @@ func NewConnector(ctx context.Context, in interface{}, opts ...Opt) (types.Conne
 		credentialManagers:      make(map[string]CredentialManagerLimited),
 		eventFeeds:              make(map[string]EventFeed),
 		accountManagers:         make(map[string]AccountManagerLimited),
+		actionManager:           actionMgr,
 	}
 
 	// WithTicketingEnabled checks for the ticketManager
@@ -137,8 +139,16 @@ func NewConnector(ctx context.Context, in interface{}, opts ...Opt) (types.Conne
 		return nil, err
 	}
 
-	if err := b.addActionManager(ctx, in); err != nil {
+	// Handle deprecated action manager interfaces (pass concrete type for registration)
+	if err := b.addActionManager(ctx, in, actionMgr); err != nil {
 		return nil, err
+	}
+
+	// Handle the new GlobalActionProvider interface
+	if globalActionProvider, ok := in.(GlobalActionProvider); ok {
+		if err := globalActionProvider.GlobalActions(ctx, actionMgr); err != nil {
+			return nil, fmt.Errorf("error registering global actions: %w", err)
+		}
 	}
 
 	addResourceType := func(ctx context.Context, rType string, rs interface{}) error {
@@ -374,7 +384,7 @@ func (b *builder) getCapabilities(ctx context.Context) (*v2.ConnectorCapabilitie
 	}
 
 	// Check for account provisioning capability (global, not per resource type)
-	if b.accountManager != nil {
+	if len(b.accountManagers) > 0 {
 		connectorCaps[v2.Capability_CAPABILITY_ACCOUNT_PROVISIONING] = struct{}{}
 	}
 	sort.Slice(resourceTypeCapabilities, func(i, j int) bool {
@@ -389,7 +399,7 @@ func (b *builder) getCapabilities(ctx context.Context) (*v2.ConnectorCapabilitie
 		connectorCaps[v2.Capability_CAPABILITY_TICKETING] = struct{}{}
 	}
 
-	if b.actionManager != nil {
+	if b.actionManager.HasActions() {
 		connectorCaps[v2.Capability_CAPABILITY_ACTIONS] = struct{}{}
 	}
 
@@ -440,13 +450,14 @@ func getCredentialDetails(ctx context.Context, b *builder) (*v2.CredentialDetail
 	rv := &v2.CredentialDetails{}
 
 	// Check for account provisioning capability details
-	if b.accountManager != nil {
-		accountProvisioningCapabilityDetails, _, err := b.accountManager.CreateAccountCapabilityDetails(ctx)
+	for _, am := range b.accountManagers {
+		accountProvisioningCapabilityDetails, _, err := am.CreateAccountCapabilityDetails(ctx)
 		if err != nil {
 			l.Error("error: getting account provisioning details", zap.Error(err))
 			return nil, fmt.Errorf("error: getting account provisioning details: %w", err)
 		}
 		rv.SetCapabilityAccountProvisioning(accountProvisioningCapabilityDetails)
+		break // Only need one account manager's details
 	}
 
 	// Check for credential rotation capability details
