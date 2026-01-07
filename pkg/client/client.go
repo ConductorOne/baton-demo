@@ -683,7 +683,6 @@ func (c *Client) CreateGroup(ctx context.Context, groupID, groupName string, gro
 
 	newGroup, err := c.GetGroup(ctx, groupID)
 	if err != nil {
-		fmt.Println("Error getting new group:", err)
 		return nil, err
 	}
 	return newGroup, nil

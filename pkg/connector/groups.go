@@ -252,7 +252,7 @@ func (o *groupBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations
 	}
 }
 
-func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
+func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry actions.ActionRegistry) error {
 	err := registry.Register(ctx, &v2.BatonActionSchema{
 		Name: "create",
 		Arguments: []*config.Field{
@@ -269,7 +269,7 @@ func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry a
 	return err
 }
 
-func (o *groupBuilder) registerDeleteGroupAction(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
+func (o *groupBuilder) registerDeleteGroupAction(ctx context.Context, registry actions.ActionRegistry) error {
 	// err := registry.Register(ctx, actions.NewDeleteActionSchema(), o.handleDeleteGroupAction)
 	err := registry.Register(ctx, &v2.BatonActionSchema{
 		Name: "delete",
@@ -338,7 +338,7 @@ func (o *groupBuilder) handleDeleteGroupAction(ctx context.Context, args *struct
 	return actions.NewReturnValues(true), nil, nil
 }
 
-func (o *groupBuilder) ResourceActions(ctx context.Context, registry actions.ResourceTypeActionRegistry) error {
+func (o *groupBuilder) ResourceActions(ctx context.Context, registry actions.ActionRegistry) error {
 	err := o.registerCreateGroupAction(ctx, registry)
 	if err != nil {
 		return err
