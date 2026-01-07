@@ -257,8 +257,8 @@ func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry a
 		Name: "create",
 		Arguments: []*config.Field{
 			{Name: "name", DisplayName: "Group Name", Field: &config.Field_StringField{}, IsRequired: true},
-			{Name: "admins", DisplayName: "Admins", Field: &config.Field_ResourceIdListField{}},
-			{Name: "members", DisplayName: "Members", Field: &config.Field_ResourceIdListField{}},
+			{Name: "admins", DisplayName: "Admins", Field: &config.Field_ResourceIdSliceField{}},
+			{Name: "members", DisplayName: "Members", Field: &config.Field_ResourceIdSliceField{}},
 		},
 		ReturnTypes: []*config.Field{
 			{Name: "success", Field: &config.Field_BoolField{}},
