@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -638,6 +639,83 @@ func (c *Client) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	}
 
 	return group, nil
+}
+
+func (c *Client) CreateGroup(ctx context.Context, groupID, groupName string, groupAdmins []string, groupMembers []string) (*Group, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, err
+	}
+
+	existingGroup, err := c.GetGroup(ctx, groupID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if existingGroup != nil {
+		return nil, errors.New("group already exists")
+	}
+
+	admins := ""
+	if len(groupAdmins) > 0 {
+		admins = strings.Join(groupAdmins, ",")
+	}
+	members := ""
+	if len(groupMembers) > 0 {
+		members = strings.Join(groupMembers, ",")
+	}
+	row := goqu.Record{
+		"id":      groupID,
+		"name":    groupName,
+		"admins":  admins,
+		"members": members,
+	}
+	baseGroupQ := c.db.Insert(groups.Name()).Prepared(true)
+	baseGroupQ = baseGroupQ.Rows(row)
+	query, args, err := baseGroupQ.ToSQL()
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = c.db.Exec(query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	newGroup, err := c.GetGroup(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	return newGroup, nil
+}
+
+func (c *Client) DeleteGroup(ctx context.Context, groupID string) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.GetGroup(ctx, groupID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("group not found")
+		}
+		return err
+	}
+
+	q := c.db.Delete(groups.Name()).Prepared(true)
+	q = q.Where(goqu.C("id").Eq(groupID))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *Client) GrantGroupMember(ctx context.Context, groupID, userID string) error {
