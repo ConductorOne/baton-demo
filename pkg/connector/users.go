@@ -10,14 +10,64 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/conductorone/baton-demo/pkg/client"
+	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/types/resource"
 )
+
+var updateUserProfileSchema = &v2.BatonActionSchema{
+	Name:        "update_profile",
+	DisplayName: "Update User Profile",
+	Description: "Update a user's profile attributes",
+	ActionType:  []v2.ActionType{v2.ActionType_ACTION_TYPE_ACCOUNT_UPDATE_PROFILE},
+
+	Arguments: []*config.Field{
+		{
+			Name:        "user_id",
+			DisplayName: "User",
+			Description: "The user to update",
+			IsRequired:  true,
+			Field: &config.Field_ResourceIdField{
+				ResourceIdField: &config.ResourceIdField{
+					Rules: &config.ResourceIDRules{
+						AllowedResourceTypeIds: []string{"user"},
+					},
+				},
+			},
+		},
+		{
+			Name:        "name",
+			DisplayName: "Name",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "email",
+			DisplayName: "Email",
+			Field:       &config.Field_StringField{},
+		},
+		{
+			Name:        "custom_attributes",
+			DisplayName: "Custom Attributes",
+			Description: "Additional custom attributes to set on the user",
+			Field:       &config.Field_StringMapField{},
+		},
+	},
+
+	ReturnTypes: []*config.Field{
+		{
+			Name:        "updated_user",
+			DisplayName: "Updated User",
+			Field:       &config.Field_ResourceField{},
+		},
+	},
+}
 
 type userBuilder struct {
 	client *client.Client
@@ -25,9 +75,14 @@ type userBuilder struct {
 
 var _ connectorbuilder.AccountManagerLimited = &userBuilder{}
 var _ connectorbuilder.CredentialManagerLimited = &userBuilder{}
+var _ connectorbuilder.ResourceActionProvider = &userBuilder{}
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
+}
+
+func (o *userBuilder) ResourceActions(ctx context.Context, registry actions.ActionRegistry) error {
+	return registry.Register(ctx, updateUserProfileSchema, o.updateUserProfile)
 }
 
 func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
@@ -232,6 +287,72 @@ func (o *userBuilder) Grant(ctx context.Context, principal *v2.Resource, entitle
 
 func (o *userBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
 	return nil, nil
+}
+
+func (o *userBuilder) updateUserProfile(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	// Use global logger since action handlers receive a fresh context without the logger attached
+	l := zap.L()
+
+	// Extract user_id (required)
+	userIDField, ok := args.Fields["user_id"]
+	if !ok {
+		return nil, nil, fmt.Errorf("missing required argument user_id")
+	}
+	userID := userIDField.GetStringValue()
+
+	// Fetch the user
+	user, err := o.client.GetUser(ctx, userID)
+	if err != nil {
+		l.Error("error getting user", zap.Error(err))
+		return nil, nil, fmt.Errorf("failed to get user: %w", err)
+	}
+	l.Info("updateUserProfile: updating user", zap.String("user", user.Name), zap.String("user_id", user.Id), zap.Any("args", args))
+
+	// Update name if provided
+	if nameField, ok := args.Fields["name"]; ok && nameField.GetStringValue() != "" {
+		user.Name = nameField.GetStringValue()
+	}
+
+	// Update email if provided
+	if emailField, ok := args.Fields["email"]; ok && emailField.GetStringValue() != "" {
+		user.Email = emailField.GetStringValue()
+	}
+
+	// Merge custom_attributes if provided
+	if customAttrsField, ok := args.Fields["custom_attributes"]; ok && customAttrsField.GetStructValue() != nil {
+		if user.Attrs == nil {
+			user.Attrs = make(map[string]string)
+		}
+		for k, v := range customAttrsField.GetStructValue().Fields {
+			user.Attrs[k] = v.GetStringValue()
+		}
+	}
+
+	// Save the updated user
+	err = o.client.UpdateUser(ctx, user)
+	if err != nil {
+		l.Error("error updating user", zap.Error(err))
+		return nil, nil, fmt.Errorf("failed to update user: %w", err)
+	}
+
+	// Build the updated user resource
+	updatedResource, err := userResource(user, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build updated user resource: %w", err)
+	}
+
+	// Convert resource to structpb for return
+	resourceStruct, err := structpb.NewStruct(map[string]interface{}{
+		"updated_user": map[string]interface{}{
+			"id":           updatedResource.Id.Resource,
+			"display_name": updatedResource.DisplayName,
+		},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create response struct: %w", err)
+	}
+
+	return resourceStruct, nil, nil
 }
 
 func newUserBuilder(client *client.Client) *userBuilder {
