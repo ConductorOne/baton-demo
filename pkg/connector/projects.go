@@ -71,7 +71,7 @@ func (o *projectBuilder) Entitlements(ctx context.Context, r *v2.Resource, ops r
 	access := sdkEntitlement.NewAssignmentEntitlement(r, projectAccessEntitlement, sdkEntitlement.WithGrantableTo(groupResourceType, userResourceType))
 	access.Description = fmt.Sprintf("Has access to the %s project", r.DisplayName)
 
-	owner := sdkEntitlement.NewPermissionEntitlement(r, projectOwnerEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
+	owner := sdkEntitlement.NewOwnershipEntitlement(r, projectOwnerEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	owner.Description = fmt.Sprintf("Is the owner of the %s project", r.DisplayName)
 
 	return []*v2.Entitlement{access, owner}, nil, nil
