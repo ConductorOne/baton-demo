@@ -86,7 +86,7 @@ func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 	member := sdkEntitlement.NewAssignmentEntitlement(resource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	member.Description = fmt.Sprintf("Is a member of the %s group", resource.DisplayName)
 
-	admin := sdkEntitlement.NewPermissionEntitlement(resource, groupAdminEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
+	admin := sdkEntitlement.NewOwnershipEntitlement(resource, groupAdminEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	admin.Description = fmt.Sprintf("Is an admin of the %s group", resource.DisplayName)
 
 	return []*v2.Entitlement{member, admin}, nil, nil
