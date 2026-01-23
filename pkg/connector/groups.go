@@ -45,12 +45,21 @@ func groupResource(g *client.Group, parentResourceID *v2.ResourceId) (*v2.Resour
 		g.Id,
 		[]resource.GroupTraitOption{resource.WithGroupProfile(profile)},
 		resource.WithParentResourceID(parentResourceID),
+		// For error reproduction, pretend like this has child groups.
+		resource.WithAnnotation(&v2.ChildResourceType{
+			ResourceTypeId: groupResourceType.Id,
+		}),
 	)
 }
 
 // List returns all the groups from the database as resource objects.
 // Groups include the GroupTrait because they have the 'shape' of the well known Group type.
 func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, ops resource.SyncOpAttrs) ([]*v2.Resource, *resource.SyncOpResults, error) {
+	if parentResourceID != nil {
+		// For error reproduction, we don't actually need child groups.
+		return nil, nil, nil
+	}
+
 	groups, err := o.client.ListGroups(ctx)
 	if err != nil {
 		return nil, nil, err
