@@ -14,9 +14,10 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
-	"github.com/conductorone/baton-sdk/pkg/types/resource"
+	sdkResource "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -39,18 +40,18 @@ func groupResource(g *client.Group, parentResourceID *v2.ResourceId) (*v2.Resour
 	profile["group_color"] = "green"
 	profile["group_size"] = len(g.Members) + len(g.Admins)
 
-	return resource.NewGroupResource(
+	return sdkResource.NewGroupResource(
 		g.Name,
 		groupResourceType,
 		g.Id,
-		[]resource.GroupTraitOption{resource.WithGroupProfile(profile)},
-		resource.WithParentResourceID(parentResourceID),
+		[]sdkResource.GroupTraitOption{sdkResource.WithGroupProfile(profile)},
+		sdkResource.WithParentResourceID(parentResourceID),
 	)
 }
 
 // List returns all the groups from the database as resource objects.
 // Groups include the GroupTrait because they have the 'shape' of the well known Group type.
-func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, ops resource.SyncOpAttrs) ([]*v2.Resource, *resource.SyncOpResults, error) {
+func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, ops sdkResource.SyncOpAttrs) ([]*v2.Resource, *sdkResource.SyncOpResults, error) {
 	groups, err := o.client.ListGroups(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -81,7 +82,7 @@ func (o *groupBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, paren
 }
 
 // Entitlements returns a membership and admin entitlement.
-func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
+func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, ops sdkResource.SyncOpAttrs) ([]*v2.Entitlement, *sdkResource.SyncOpResults, error) {
 	// This entitlement represents being a member of the group, and it can be granted to Users.
 	member := sdkEntitlement.NewAssignmentEntitlement(resource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
 	member.Description = fmt.Sprintf("Is a member of the %s group", resource.DisplayName)
@@ -93,7 +94,7 @@ func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, 
 }
 
 // Grants returns grant information for group administrators and members.
-func (o *groupBuilder) Grants(ctx context.Context, r *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Grant, *resource.SyncOpResults, error) {
+func (o *groupBuilder) Grants(ctx context.Context, r *v2.Resource, ops sdkResource.SyncOpAttrs) ([]*v2.Grant, *sdkResource.SyncOpResults, error) {
 	b := &pagination.Bag{}
 	err := b.Unmarshal(ops.PageToken.Token)
 	if err != nil {
@@ -134,7 +135,7 @@ func (o *groupBuilder) Grants(ctx context.Context, r *v2.Resource, ops resource.
 	case "admins":
 		end := min(offset+limit, len(grp.Admins))
 		for _, adminID := range grp.Admins[offset:end] {
-			pID, err := resource.NewResourceID(userResourceType, adminID)
+			pID, err := sdkResource.NewResourceID(userResourceType, adminID)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -153,11 +154,11 @@ func (o *groupBuilder) Grants(ctx context.Context, r *v2.Resource, ops resource.
 		if err != nil {
 			return nil, nil, err
 		}
-		return ret, &resource.SyncOpResults{NextPageToken: nextPageToken}, nil
+		return ret, &sdkResource.SyncOpResults{NextPageToken: nextPageToken}, nil
 	case "members":
 		end := min(offset+limit, len(grp.Members))
 		for _, memberID := range grp.Members[offset:end] {
-			pID, err := resource.NewResourceID(userResourceType, memberID)
+			pID, err := sdkResource.NewResourceID(userResourceType, memberID)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -173,7 +174,7 @@ func (o *groupBuilder) Grants(ctx context.Context, r *v2.Resource, ops resource.
 		if err != nil {
 			return nil, nil, err
 		}
-		return ret, &resource.SyncOpResults{NextPageToken: nextPageToken}, nil
+		return ret, &sdkResource.SyncOpResults{NextPageToken: nextPageToken}, nil
 	default:
 		return nil, nil, fmt.Errorf("unknown resource type")
 	}
@@ -257,8 +258,20 @@ func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry a
 		Name: "create",
 		Arguments: []*config.Field{
 			{Name: "name", DisplayName: "Group Name", Field: &config.Field_StringField{}, IsRequired: true},
-			{Name: "admins", DisplayName: "Admins", Field: &config.Field_ResourceIdSliceField{}},
-			{Name: "members", DisplayName: "Members", Field: &config.Field_ResourceIdSliceField{}},
+			{Name: "admins", DisplayName: "Admins", Field: &config.Field_ResourceIdSliceField{
+				ResourceIdSliceField: &config.ResourceIdSliceField{
+					Rules: &config.RepeatedResourceIdRules{
+						AllowedResourceTypeIds: []string{"user"},
+					},
+				},
+			}},
+			{Name: "members", DisplayName: "Members", Field: &config.Field_ResourceIdSliceField{
+				ResourceIdSliceField: &config.ResourceIdSliceField{
+					Rules: &config.RepeatedResourceIdRules{
+						AllowedResourceTypeIds: []string{"user"},
+					},
+				},
+			}},
 		},
 		ReturnTypes: []*config.Field{
 			{Name: "success", Field: &config.Field_BoolField{}},
@@ -321,7 +334,63 @@ func (o *groupBuilder) handleCreateGroupAction(ctx context.Context, args *struct
 		return nil, nil, err
 	}
 
-	return actions.NewReturnValues(true, resourceRv), nil, nil
+	// Reuse the Entitlements method to get entitlements for the resource
+	entitlements, _, err := o.Entitlements(ctx, resource, sdkResource.SyncOpAttrs{})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Serialize entitlements to structpb
+	entitlementValues := make([]*structpb.Value, len(entitlements))
+	for i, ent := range entitlements {
+		jsonBytes, err := protojson.Marshal(ent)
+		if err != nil {
+			return nil, nil, err
+		}
+		structValue := &structpb.Struct{}
+		if err := protojson.Unmarshal(jsonBytes, structValue); err != nil {
+			return nil, nil, err
+		}
+		entitlementValues[i] = structpb.NewStructValue(structValue)
+	}
+	entitlementsRv := actions.NewListReturnField("entitlements", entitlementValues)
+
+	// Reuse the Grants method to get grants for the resource
+	// Iterate through all pages to get both member and admin grants
+	var allGrants []*v2.Grant
+	pageToken := ""
+	for {
+		syncOpAttrs := sdkResource.SyncOpAttrs{}
+		if pageToken != "" {
+			syncOpAttrs.PageToken = pagination.Token{Token: pageToken}
+		}
+		grants, results, err := o.Grants(ctx, resource, syncOpAttrs)
+		if err != nil {
+			return nil, nil, err
+		}
+		allGrants = append(allGrants, grants...)
+		if results == nil || results.NextPageToken == "" {
+			break
+		}
+		pageToken = results.NextPageToken
+	}
+
+	// Serialize grants to structpb
+	grantValues := make([]*structpb.Value, len(allGrants))
+	for i, grant := range allGrants {
+		jsonBytes, err := protojson.Marshal(grant)
+		if err != nil {
+			return nil, nil, err
+		}
+		structValue := &structpb.Struct{}
+		if err := protojson.Unmarshal(jsonBytes, structValue); err != nil {
+			return nil, nil, err
+		}
+		grantValues[i] = structpb.NewStructValue(structValue)
+	}
+	grantsRv := actions.NewListReturnField("grants", grantValues)
+
+	return actions.NewReturnValues(true, resourceRv, entitlementsRv, grantsRv), nil, nil
 }
 
 func (o *groupBuilder) handleDeleteGroupAction(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
