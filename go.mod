@@ -120,4 +120,4 @@ require (
 	modernc.org/sqlite v1.34.5 // indirect
 )
 
-// replace github.com/conductorone/baton-sdk => ../baton-sdk
+replace github.com/conductorone/baton-sdk => ../baton-sdk
