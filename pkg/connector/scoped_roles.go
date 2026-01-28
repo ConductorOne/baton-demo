@@ -5,14 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -22,6 +26,9 @@ var (
 type scopedRoleBuilder struct {
 	client *client.Client
 }
+
+var _ connectorbuilder.ResourceSyncerV2 = (*scopedRoleBuilder)(nil)
+var _ connectorbuilder.ResourceProvisionerV2Limited = (*scopedRoleBuilder)(nil)
 
 func (o *scopedRoleBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return scopedRoleResourceType
@@ -140,6 +147,116 @@ func (o *scopedRoleBuilder) Grants(ctx context.Context, r *v2.Resource, ops rs.S
 		grants = append(grants, sdkGrant.NewGrant(r, scopedRoleAssignmentEntitlement, pID))
 	}
 	return grants, nil, nil
+}
+
+func (o *scopedRoleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) ([]*v2.Grant, annotations.Annotations, error) {
+	if principal.Id.ResourceType != userResourceType.Id {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "baton-demo: only users can have scoped roles granted")
+	}
+
+	// Get Scope binding trait from resource
+	scopeTrait, err := rs.GetScopeBindingTrait(entitlement.Resource)
+	if err != nil {
+		return nil, nil, err
+	}
+	if scopeTrait == nil {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "scope binding trait was not found on resource")
+	}
+
+	roleID := scopeTrait.RoleId.Resource
+	projectID := scopeTrait.ScopeResourceId.Resource
+
+	// Make sure the role and project exist.
+	_, err = o.client.GetRole(ctx, roleID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, status.Errorf(codes.NotFound, "baton-demo: role not found")
+		}
+		return nil, nil, err
+	}
+	_, err = o.client.GetProject(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, status.Errorf(codes.NotFound, "baton-demo: project not found")
+		}
+		return nil, nil, err
+	}
+
+	// Create scoped role if it doesn't exist.
+	scopedRole, err := o.client.GetScopedRole(ctx, roleID, projectID)
+	if err != nil && errors.Is(err, sql.ErrNoRows) {
+		scopedRole = &client.ScopedRole{
+			Id:              makeScopedRoleResourceID(roleID, projectID),
+			ProjectId:       projectID,
+			RoleId:          roleID,
+			UserAssignments: []string{principal.Id.Resource},
+		}
+		err = o.client.CreateScopedRole(ctx, scopedRole)
+		if err != nil {
+			return nil, nil, err
+		}
+		resource, err := o.scopedRoleResource(ctx, scopedRole, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		scopedRoleGrant := sdkGrant.NewGrant(resource, scopedRoleAssignmentEntitlement, principal.Id)
+		return []*v2.Grant{scopedRoleGrant}, nil, nil
+	} else if err != nil {
+		return nil, nil, err
+	}
+
+	if slices.Contains(scopedRole.UserAssignments, principal.Id.Resource) {
+		scopedRoleGrant := sdkGrant.NewGrant(entitlement.Resource, scopedRoleAssignmentEntitlement, principal.Id)
+		return []*v2.Grant{scopedRoleGrant}, annotations.New(&v2.GrantAlreadyExists{}), nil
+	}
+
+	scopedRole.UserAssignments = append(scopedRole.UserAssignments, principal.Id.Resource)
+	err = o.client.UpdateScopedRole(ctx, scopedRole)
+	if err != nil {
+		return nil, nil, err
+	}
+	resource, err := o.scopedRoleResource(ctx, scopedRole, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	scopedRoleGrant := sdkGrant.NewGrant(resource, scopedRoleAssignmentEntitlement, principal.Id)
+	return []*v2.Grant{scopedRoleGrant}, nil, nil
+}
+
+func (o *scopedRoleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	principal := grant.Principal
+	entitlement := grant.Entitlement
+
+	if principal.Id.ResourceType != userResourceType.Id {
+		return nil, status.Errorf(codes.InvalidArgument, "baton-demo: only users can have scoped roles revoked")
+	}
+
+	roleID, projectID, err := parseScopedRoleResourceID(entitlement.GetResource().GetId().GetResource())
+	if err != nil {
+		return nil, err
+	}
+
+	scopedRole, err := o.client.GetScopedRole(ctx, roleID, projectID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return annotations.New(&v2.GrantAlreadyRevoked{}), nil
+		}
+		return nil, err
+	}
+
+	if !slices.Contains(scopedRole.UserAssignments, principal.Id.Resource) {
+		return annotations.New(&v2.GrantAlreadyRevoked{}), nil
+	}
+
+	scopedRole.UserAssignments = slices.DeleteFunc(scopedRole.UserAssignments, func(userID string) bool {
+		return userID == principal.Id.Resource
+	})
+	err = o.client.UpdateScopedRole(ctx, scopedRole)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
 }
 
 func newScopedRoleBuilder(client *client.Client) *scopedRoleBuilder {

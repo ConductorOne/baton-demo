@@ -1177,6 +1177,28 @@ func (c *Client) CreateScopedRole(ctx context.Context, scopedRole *ScopedRole) e
 	return nil
 }
 
+func (c *Client) UpdateScopedRole(ctx context.Context, scopedRole *ScopedRole) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	q := c.db.Update(scopedRoles.Name()).Prepared(true)
+	q = q.Set(goqu.Record{
+		"user_assignments": strings.Join(scopedRole.UserAssignments, ","),
+	})
+	q = q.Where(goqu.C("id").Eq(scopedRole.Id))
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return err
+	}
+	_, err = c.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *Client) DeleteScopedRole(ctx context.Context, roleID, projectID string) error {
 	err := c.validateDB()
 	if err != nil {
