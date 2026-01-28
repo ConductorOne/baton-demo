@@ -109,11 +109,12 @@ func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 
 	// ensure all schemas exist
 	for _, t := range allTableDescriptors {
-		query, args := t.Schema()
-
-		_, err := c.db.Exec(query, args...)
-		if err != nil {
-			return nil, err
+		queries, args := t.Schema()
+		for _, query := range queries {
+			_, err := c.db.Exec(query, args...)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
