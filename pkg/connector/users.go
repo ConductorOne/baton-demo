@@ -73,9 +73,10 @@ type userBuilder struct {
 	client *client.Client
 }
 
-var _ connectorbuilder.AccountManagerLimited = &userBuilder{}
+var _ connectorbuilder.AccountManagerV2 = &userBuilder{}
 var _ connectorbuilder.CredentialManagerLimited = &userBuilder{}
 var _ connectorbuilder.ResourceActionProvider = &userBuilder{}
+var _ connectorbuilder.ResourceSyncerV2 = &userBuilder{}
 
 func (o *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return userResourceType
@@ -145,6 +146,9 @@ func (o *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId,
 func (o *userBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parentResourceId *v2.ResourceId) (*v2.Resource, annotations.Annotations, error) {
 	user, err := o.client.GetUser(ctx, resourceId.Resource)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, status.Errorf(codes.NotFound, "user not found")
+		}
 		return nil, nil, err
 	}
 	resource, err := userResource(user, parentResourceId)
@@ -296,15 +300,21 @@ func (o *userBuilder) updateUserProfile(ctx context.Context, args *structpb.Stru
 	// Extract user_id (required)
 	userResourceID, ok := actions.GetResourceIDArg(args, "user_id")
 	if !ok {
-		return nil, nil, fmt.Errorf("missing required argument user_id")
+		return nil, nil, status.Errorf(codes.InvalidArgument, "missing required argument user_id")
 	}
 	userID := userResourceID.GetResource()
+	if userID == "" {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "missing required argument user_id")
+	}
 
 	// Fetch the user
 	user, err := o.client.GetUser(ctx, userID)
 	if err != nil {
 		l.Error("error getting user", zap.Error(err))
-		return nil, nil, status.Errorf(codes.NotFound, "failed to get user: %s", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, status.Errorf(codes.NotFound, "user id %s not found", userID)
+		}
+		return nil, nil, err
 	}
 	l.Info("updateUserProfile: updating user", zap.String("user", user.Name), zap.String("user_id", user.Id), zap.Any("args", args))
 
@@ -342,8 +352,8 @@ func (o *userBuilder) updateUserProfile(ctx context.Context, args *structpb.Stru
 	}
 
 	// Convert resource to structpb for return
-	resourceStruct, err := structpb.NewStruct(map[string]interface{}{
-		"updated_user": map[string]interface{}{
+	resourceStruct, err := structpb.NewStruct(map[string]any{
+		"updated_user": map[string]any{
 			"id":           updatedResource.Id.Resource,
 			"display_name": updatedResource.DisplayName,
 		},
