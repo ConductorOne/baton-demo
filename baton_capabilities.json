@@ -44,6 +44,21 @@
     },
     {
       "resourceType": {
+        "id": "scoped_role",
+        "displayName": "Scoped Role",
+        "traits": [
+          "TRAIT_SCOPE_BINDING"
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC",
+        "CAPABILITY_TARGETED_SYNC",
+        "CAPABILITY_PROVISION"
+      ],
+      "permissions": {}
+    },
+    {
+      "resourceType": {
         "id": "user",
         "displayName": "User",
         "traits": [
@@ -75,7 +90,8 @@
     "CAPABILITY_RESOURCE_CREATE",
     "CAPABILITY_RESOURCE_DELETE",
     "CAPABILITY_ACTIONS",
-    "CAPABILITY_TARGETED_SYNC"
+    "CAPABILITY_TARGETED_SYNC",
+    "CAPABILITY_SERVICE_MODE_TARGETED_SYNC"
   ],
   "credentialDetails": {
     "capabilityAccountProvisioning": {
