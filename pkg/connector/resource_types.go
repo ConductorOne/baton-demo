@@ -27,6 +27,13 @@ var roleResourceType = &v2.ResourceType{
 	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
 }
 
+// The scoped role resource type is for all scoped role objects from the database.
+var scopedRoleResourceType = &v2.ResourceType{
+	Id:          "scoped_role",
+	DisplayName: "Scoped Role",
+	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SCOPE_BINDING},
+}
+
 // The project resource type is for all project objects from the database
 // Projects don't match any of the well-known resource traits.
 var projectResourceType = &v2.ResourceType{

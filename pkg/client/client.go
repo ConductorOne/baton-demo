@@ -31,6 +31,7 @@ import (
 // Users are humans
 // Groups can be assigned Users as Admins or Members
 // Roles can be assigned directly to Users or to a Group
+// ScopedRoles are roles that are scoped to a project
 // Projects always have a single User as the owner, and can be assigned to Groups
 
 type User struct {
@@ -53,6 +54,13 @@ type Role struct {
 	Name              string
 	DirectAssignments []string
 	GroupAssignments  []string
+}
+
+type ScopedRole struct {
+	Id              string
+	ProjectId       string
+	RoleId          string
+	UserAssignments []string
 }
 
 type Project struct {
@@ -101,11 +109,12 @@ func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 
 	// ensure all schemas exist
 	for _, t := range allTableDescriptors {
-		query, args := t.Schema()
-
-		_, err := c.db.Exec(query, args...)
-		if err != nil {
-			return nil, err
+		queries, args := t.Schema()
+		for _, query := range queries {
+			_, err := c.db.Exec(query, args...)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -271,6 +280,24 @@ func (c *Client) initDB(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+		case dbResource.ScopedRole != nil:
+			row := goqu.Record{
+				"id":               dbResource.ScopedRole.Id,
+				"project_id":       dbResource.ScopedRole.ProjectId,
+				"role_id":          dbResource.ScopedRole.RoleId,
+				"user_assignments": strings.Join(dbResource.ScopedRole.UserAssignments, ","),
+			}
+			baseScopedRoleQ := c.db.Insert(scopedRoles.Name()).Prepared(true)
+			baseScopedRoleQ = baseScopedRoleQ.Rows(row)
+			baseScopedRoleQ = baseScopedRoleQ.OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := baseScopedRoleQ.ToSQL()
+			if err != nil {
+				return err
+			}
+			_, err = c.db.Exec(query, args...)
+			if err != nil {
+				return err
+			}
 		case dbResource.Project != nil:
 			row := goqu.Record{
 				"id":                dbResource.Project.Id,
@@ -351,6 +378,7 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	if err != nil {
 		return nil, "", err
 	}
+	defer rows.Close()
 
 	usersList := []*User{}
 	for rows.Next() {
@@ -583,6 +611,7 @@ func (c *Client) ListGroups(ctx context.Context) ([]*Group, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	groupsList := []*Group{}
 	for rows.Next() {
@@ -735,10 +764,8 @@ func (c *Client) GrantGroupMember(ctx context.Context, groupID, userID string) e
 	}
 
 	// Check whether the user is already a member of the group
-	for _, u := range group.Members {
-		if u == user.Id {
-			return nil
-		}
+	if slices.Contains(group.Members, user.Id) {
+		return nil
 	}
 
 	// Add the user to the group
@@ -910,6 +937,7 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	rolesList := []*Role{}
 	for rows.Next() {
@@ -1063,6 +1091,138 @@ func (c *Client) RevokeRole(ctx context.Context, userID, roleID string) error {
 	return nil
 }
 
+func (c *Client) ListScopedRoles(ctx context.Context) ([]*ScopedRole, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, err
+	}
+
+	q := c.db.From(scopedRoles.Name()).Prepared(true)
+	q = q.Select("id", "project_id", "role_id", "user_assignments")
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	scopedRolesList := []*ScopedRole{}
+	for rows.Next() {
+		scopedRole := &ScopedRole{}
+		userAssignments := ""
+		err = rows.Scan(&scopedRole.Id, &scopedRole.ProjectId, &scopedRole.RoleId, &userAssignments)
+		if err != nil {
+			return nil, err
+		}
+		if userAssignments != "" {
+			scopedRole.UserAssignments = strings.Split(userAssignments, ",")
+		}
+		scopedRolesList = append(scopedRolesList, scopedRole)
+	}
+
+	return scopedRolesList, nil
+}
+
+func (c *Client) GetScopedRole(ctx context.Context, roleID, projectID string) (*ScopedRole, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, err
+	}
+
+	q := c.db.From(scopedRoles.Name()).Prepared(true)
+	q = q.Select("id", "project_id", "role_id", "user_assignments")
+	q = q.Where(goqu.C("role_id").Eq(roleID), goqu.C("project_id").Eq(projectID))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, err
+	}
+
+	row := c.db.QueryRowContext(ctx, query, args...)
+	scopedRole := &ScopedRole{}
+	userAssignments := ""
+	err = row.Scan(&scopedRole.Id, &scopedRole.ProjectId, &scopedRole.RoleId, &userAssignments)
+	if err != nil {
+		return nil, err
+	}
+	if userAssignments != "" {
+		scopedRole.UserAssignments = strings.Split(userAssignments, ",")
+	}
+	return scopedRole, nil
+}
+
+func (c *Client) CreateScopedRole(ctx context.Context, scopedRole *ScopedRole) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	row := goqu.Record{
+		"id":               scopedRole.Id,
+		"project_id":       scopedRole.ProjectId,
+		"role_id":          scopedRole.RoleId,
+		"user_assignments": strings.Join(scopedRole.UserAssignments, ","),
+	}
+	baseScopedRoleQ := c.db.Insert(scopedRoles.Name()).Prepared(true)
+	baseScopedRoleQ = baseScopedRoleQ.Rows(row)
+	baseScopedRoleQ = baseScopedRoleQ.OnConflict(goqu.DoUpdate("id", row))
+	query, args, err := baseScopedRoleQ.ToSQL()
+	if err != nil {
+		return err
+	}
+	_, err = c.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) UpdateScopedRole(ctx context.Context, scopedRole *ScopedRole) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	q := c.db.Update(scopedRoles.Name()).Prepared(true)
+	q = q.Set(goqu.Record{
+		"user_assignments": strings.Join(scopedRole.UserAssignments, ","),
+	})
+	q = q.Where(goqu.C("id").Eq(scopedRole.Id))
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return err
+	}
+	_, err = c.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) DeleteScopedRole(ctx context.Context, roleID, projectID string) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	q := c.db.Delete(scopedRoles.Name()).Prepared(true)
+	q = q.Where(goqu.C("role_id").Eq(roleID), goqu.C("project_id").Eq(projectID))
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return err
+	}
+	_, err = c.db.Exec(query, args...)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // ListProjects returns all the projects from the database.
 func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 	err := c.validateDB()
@@ -1082,6 +1242,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	projectsList := []*Project{}
 	for rows.Next() {

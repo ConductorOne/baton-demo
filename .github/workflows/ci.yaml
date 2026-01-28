@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Install Go
         uses: actions/setup-go@v5
         with:
@@ -27,7 +27,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Install Go
         uses: actions/setup-go@v5
         with:
@@ -36,7 +36,7 @@ jobs:
         run: go test -v -covermode=count -json ./... > test.json
       - name: annotate go tests
         if: always()
-        uses: guyarb/golang-test-annotations@v0.6.0
+        uses: guyarb/golang-test-annotations@v0.8.0
         with:
           test-results: test.json
   sync-test:
@@ -45,7 +45,7 @@ jobs:
       BATON_LOG_LEVEL: debug
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Install Go
         uses: actions/setup-go@v5
         with:
@@ -54,15 +54,22 @@ jobs:
         run: go build ./cmd/baton-demo
       - name: Initialize database
         run: ./baton-demo --init-db
+      - name: Grant/revoke scoped role
+        uses: ConductorOne/github-workflows/actions/sync-test@v4
+        with:
+          connector: ./baton-demo
+          baton-entitlement: 'scoped_role:role-0000000:project-0000000:assignment'
+          baton-principal: 'user-0000001'
+          baton-principal-type: 'user'
       - name: Grant/revoke
-        uses: ConductorOne/github-workflows/actions/sync-test@v2
+        uses: ConductorOne/github-workflows/actions/sync-test@v4
         with:
           connector: ./baton-demo
           baton-entitlement: 'group:group-0000001:member'
           baton-principal: 'user-0000000'
           baton-principal-type: 'user'
       - name: Test account creation
-        uses: ConductorOne/github-workflows/actions/account-provisioning@v3
+        uses: ConductorOne/github-workflows/actions/account-provisioning@v4
         with:
           connector: ./baton-demo
           account-email: testuser1@example.com

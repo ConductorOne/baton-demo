@@ -7,11 +7,12 @@ import (
 )
 
 type dbResource struct {
-	User     *User
-	Group    *Group
-	Role     *Role
-	Project  *Project
-	Password *Password
+	User       *User
+	Group      *Group
+	Role       *Role
+	ScopedRole *ScopedRole
+	Project    *Project
+	Password   *Password
 }
 
 func (r *dbResource) String() string {
@@ -22,6 +23,8 @@ func (r *dbResource) String() string {
 		return fmt.Sprintf("Group: id %s name '%s' %d admins %d members", r.Group.Id, r.Group.Name, len(r.Group.Admins), len(r.Group.Members))
 	case r.Role != nil:
 		return fmt.Sprintf("Role: id %s name '%s' %d users %d groups", r.Role.Id, r.Role.Name, len(r.Role.DirectAssignments), len(r.Role.GroupAssignments))
+	case r.ScopedRole != nil:
+		return fmt.Sprintf("ScopedRole: id %s project %s role %s", r.ScopedRole.Id, r.ScopedRole.ProjectId, r.ScopedRole.RoleId)
 	case r.Project != nil:
 		return fmt.Sprintf("Project: id %s name '%s' owner %s %d groups", r.Project.Id, r.Project.Name, r.Project.Owner, len(r.Project.GroupAssignments))
 	case r.Password != nil:
@@ -31,12 +34,13 @@ func (r *dbResource) String() string {
 }
 
 type generator struct {
-	config          *config.Demo
-	currentUser     int
-	currentPassword int
-	currentGroup    int
-	currentRole     int
-	currentProject  int
+	config            *config.Demo
+	currentUser       int
+	currentPassword   int
+	currentGroup      int
+	currentRole       int
+	currentScopedRole int
+	currentProject    int
 }
 
 func userId(i int) string {
@@ -102,21 +106,45 @@ func (g *generator) Next() (*dbResource, bool) {
 		return db, true
 	}
 	if g.currentRole < g.config.Roles {
+		directAssignments := []string{}
+		if g.config.Users > 0 {
+			directAssignments = append(directAssignments, userId(g.currentRole%g.config.Users))
+			directAssignments = append(directAssignments, userId((g.currentRole*10)%g.config.Users))
+		}
+		groupAssignments := []string{}
+		if g.config.Groups > 5 {
+			groupAssignments = append(groupAssignments, fmt.Sprintf("group-%07d", g.currentRole%g.config.Groups))
+			groupAssignments = append(groupAssignments, fmt.Sprintf("group-%07d", (g.currentRole*10)%g.config.Groups))
+		}
 		db := &dbResource{
 			Role: &Role{
-				Id:   fmt.Sprintf("role-%07d", g.currentRole),
-				Name: fmt.Sprintf("Role %07d", g.currentRole),
-				DirectAssignments: []string{
-					userId(g.currentRole % g.config.Users),
-					userId((g.currentRole * 10) % g.config.Users),
-				},
-				GroupAssignments: []string{
-					fmt.Sprintf("group-%07d", g.currentRole%g.config.Groups),
-					fmt.Sprintf("group-%07d", (g.currentRole*10)%g.config.Groups),
-				},
+				Id:                fmt.Sprintf("role-%07d", g.currentRole),
+				Name:              fmt.Sprintf("Role %07d", g.currentRole),
+				DirectAssignments: directAssignments,
+				GroupAssignments:  groupAssignments,
 			},
 		}
 		g.currentRole++
+		return db, true
+	}
+	if g.currentScopedRole < g.config.ScopedRoles {
+		userAssignments := []string{}
+		if g.config.Users > 0 {
+			userAssignments = append(userAssignments, userId(g.currentScopedRole%g.config.Users))
+			userAssignments = append(userAssignments, userId((g.currentScopedRole*5)%g.config.Users))
+		}
+		var db *dbResource
+		if g.config.Projects > 0 && g.config.Roles > 0 {
+			db = &dbResource{
+				ScopedRole: &ScopedRole{
+					Id:              fmt.Sprintf("scoped-role-%07d", g.currentScopedRole),
+					ProjectId:       fmt.Sprintf("project-%07d", g.currentScopedRole%g.config.Projects),
+					RoleId:          fmt.Sprintf("role-%07d", g.currentScopedRole%g.config.Roles),
+					UserAssignments: userAssignments,
+				},
+			}
+		}
+		g.currentScopedRole++
 		return db, true
 	}
 	if g.currentUser < g.config.Users {
@@ -156,13 +184,14 @@ var allTableDescriptors = []tableDescriptor{
 	users,
 	groups,
 	roles,
+	scopedRoles,
 	projects,
 	passwords,
 }
 
 type tableDescriptor interface {
 	Name() string
-	Schema() (string, []any)
+	Schema() ([]string, []any)
 }
 
 var users = (*usersTable)(nil)
@@ -173,8 +202,10 @@ func (t *usersTable) Name() string {
 	return "users"
 }
 
-func (t *usersTable) Schema() (string, []any) {
-	return "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT, enabled BOOLEAN DEFAULT 1, attrs BLOB)", []any{}
+func (t *usersTable) Schema() ([]string, []any) {
+	return []string{
+		"CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT, enabled BOOLEAN DEFAULT 1, attrs BLOB)",
+	}, []any{}
 }
 
 var groups = (*groupsTable)(nil)
@@ -185,8 +216,10 @@ func (t *groupsTable) Name() string {
 	return "groups"
 }
 
-func (t *groupsTable) Schema() (string, []any) {
-	return "CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, admins TEXT NOT NULL, members TEXT NOT NULL)", []any{}
+func (t *groupsTable) Schema() ([]string, []any) {
+	return []string{
+		"CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, admins TEXT NOT NULL, members TEXT NOT NULL)",
+	}, []any{}
 }
 
 var roles = (*rolesTable)(nil)
@@ -197,8 +230,33 @@ func (t *rolesTable) Name() string {
 	return "roles"
 }
 
-func (t *rolesTable) Schema() (string, []any) {
-	return "CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, direct_assignments TEXT NOT NULL, group_assignments TEXT NOT NULL)", []any{}
+func (t *rolesTable) Schema() ([]string, []any) {
+	return []string{
+		"CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, direct_assignments TEXT NOT NULL, group_assignments TEXT NOT NULL)",
+	}, []any{}
+}
+
+var scopedRoles = (*scopedRolesTable)(nil)
+
+type scopedRolesTable struct{}
+
+func (t *scopedRolesTable) Name() string {
+	return "scoped_roles"
+}
+
+func (t *scopedRolesTable) Schema() ([]string, []any) {
+	statement := []string{`
+	CREATE TABLE IF NOT EXISTS scoped_roles (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		role_id TEXT NOT NULL,
+		user_assignments TEXT NOT NULL,
+		FOREIGN KEY(project_id) REFERENCES projects(id),
+		FOREIGN KEY(role_id) REFERENCES roles(id)
+	);`,
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_scoped_roles_project_id_role_id ON scoped_roles (project_id, role_id);",
+	}
+	return statement, []any{}
 }
 
 var projects = (*projectsTable)(nil)
@@ -209,8 +267,10 @@ func (t *projectsTable) Name() string {
 	return "projects"
 }
 
-func (t *projectsTable) Schema() (string, []any) {
-	return "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, group_assignments TEXT NOT NULL)", []any{}
+func (t *projectsTable) Schema() ([]string, []any) {
+	return []string{
+		"CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, group_assignments TEXT NOT NULL)",
+	}, []any{}
 }
 
 var passwords = (*passwordsTable)(nil)
@@ -221,6 +281,8 @@ func (t *passwordsTable) Name() string {
 	return "passwords"
 }
 
-func (t *passwordsTable) Schema() (string, []any) {
-	return "CREATE TABLE IF NOT EXISTS passwords (id TEXT PRIMARY KEY, password TEXT NOT NULL, user_id TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id))", []any{}
+func (t *passwordsTable) Schema() ([]string, []any) {
+	return []string{
+		"CREATE TABLE IF NOT EXISTS passwords (id TEXT PRIMARY KEY, password TEXT NOT NULL, user_id TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id))",
+	}, []any{}
 }
