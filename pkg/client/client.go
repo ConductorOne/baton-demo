@@ -378,6 +378,7 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	if err != nil {
 		return nil, "", err
 	}
+	defer rows.Close()
 
 	usersList := []*User{}
 	for rows.Next() {
@@ -610,6 +611,7 @@ func (c *Client) ListGroups(ctx context.Context) ([]*Group, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	groupsList := []*Group{}
 	for rows.Next() {
@@ -935,6 +937,7 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	rolesList := []*Role{}
 	for rows.Next() {
@@ -1106,6 +1109,7 @@ func (c *Client) ListScopedRoles(ctx context.Context) ([]*ScopedRole, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	scopedRolesList := []*ScopedRole{}
 	for rows.Next() {
@@ -1238,6 +1242,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	projectsList := []*Project{}
 	for rows.Next() {
