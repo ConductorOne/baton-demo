@@ -133,13 +133,16 @@ func (g *generator) Next() (*dbResource, bool) {
 			userAssignments = append(userAssignments, userId(g.currentScopedRole%g.config.Users))
 			userAssignments = append(userAssignments, userId((g.currentScopedRole*5)%g.config.Users))
 		}
-		db := &dbResource{
-			ScopedRole: &ScopedRole{
-				Id:              fmt.Sprintf("scoped-role-%07d", g.currentScopedRole),
-				ProjectId:       fmt.Sprintf("project-%07d", g.currentScopedRole%g.config.Projects),
-				RoleId:          fmt.Sprintf("role-%07d", g.currentScopedRole%g.config.Roles),
-				UserAssignments: userAssignments,
-			},
+		var db *dbResource
+		if g.config.Projects > 0 && g.config.Roles > 0 {
+			db = &dbResource{
+				ScopedRole: &ScopedRole{
+					Id:              fmt.Sprintf("scoped-role-%07d", g.currentScopedRole),
+					ProjectId:       fmt.Sprintf("project-%07d", g.currentScopedRole%g.config.Projects),
+					RoleId:          fmt.Sprintf("role-%07d", g.currentScopedRole%g.config.Roles),
+					UserAssignments: userAssignments,
+				},
+			}
 		}
 		g.currentScopedRole++
 		return db, true
