@@ -269,7 +269,7 @@ func (o *userBuilder) Create(ctx context.Context, resource *v2.Resource) (*v2.Re
 
 func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
 	if resourceId.ResourceType != userResourceType.Id {
-		return nil, fmt.Errorf("baton-demo: non-user resource passed to role delete")
+		return nil, fmt.Errorf("baton-demo: non-user resource passed to user delete")
 	}
 
 	user, err := o.client.GetUser(ctx, resourceId.Resource)
