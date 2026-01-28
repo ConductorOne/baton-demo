@@ -260,7 +260,7 @@ func (o *userBuilder) CreateAccount(
 }
 
 func (o *userBuilder) Create(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
-	return nil, nil, fmt.Errorf("baton-demo: role creation not supported")
+	return nil, nil, fmt.Errorf("baton-demo: user creation not supported")
 }
 
 func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
