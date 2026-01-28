@@ -20,6 +20,11 @@ var (
 		field.WithDefaultValue(3),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
+	ScopedRoleCountField = field.IntField("scoped-roles",
+		field.WithDescription("Number of scoped roles to create."),
+		field.WithDefaultValue(3),
+		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
+	)
 	UserCountField = field.IntField("users",
 		field.WithDescription("Number of users to create."),
 		field.WithDefaultValue(10),
@@ -36,6 +41,7 @@ var Config = field.NewConfiguration([]field.SchemaField{
 	GroupCountField,
 	ProjectCountField,
 	RoleCountField,
+	ScopedRoleCountField,
 	UserCountField,
 	InitDB,
 	DbFileName,

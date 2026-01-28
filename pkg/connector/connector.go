@@ -21,6 +21,7 @@ func (d *Demo) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceS
 		newUserBuilder(d.client),
 		newGroupBuilder(d.client),
 		newRoleBuilder(d.client),
+		newScopedRoleBuilder(d.client),
 		newProjectBuilder(d.client),
 	}
 }
