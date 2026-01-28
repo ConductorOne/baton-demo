@@ -294,11 +294,11 @@ func (o *userBuilder) updateUserProfile(ctx context.Context, args *structpb.Stru
 	l := zap.L()
 
 	// Extract user_id (required)
-	userIDField, ok := args.Fields["user_id"]
+	userResourceID, ok := actions.GetResourceIDArg(args, "user_id")
 	if !ok {
 		return nil, nil, fmt.Errorf("missing required argument user_id")
 	}
-	userID := userIDField.GetStringValue()
+	userID := userResourceID.GetResource()
 
 	// Fetch the user
 	user, err := o.client.GetUser(ctx, userID)
