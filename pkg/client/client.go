@@ -280,7 +280,6 @@ func (c *Client) initDB(ctx context.Context) error {
 				return err
 			}
 		case dbResource.ScopedRole != nil:
-			fmt.Printf("Inserting scoped role: %+v\n", dbResource.ScopedRole)
 			row := goqu.Record{
 				"id":               dbResource.ScopedRole.Id,
 				"project_id":       dbResource.ScopedRole.ProjectId,

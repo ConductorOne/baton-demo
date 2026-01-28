@@ -72,7 +72,6 @@ func (o *scopedRoleBuilder) List(ctx context.Context, parentResourceID *v2.Resou
 	if err != nil {
 		return nil, nil, err
 	}
-	fmt.Printf("Scoped roles: %+v\n", scopedRoles)
 
 	var ret []*v2.Resource
 	for _, sr := range scopedRoles {
@@ -130,7 +129,6 @@ func (o *scopedRoleBuilder) Grants(ctx context.Context, r *v2.Resource, ops rs.S
 	}
 
 	// TODO: Pagination.
-	fmt.Printf("Scoped role: %+v\n", scopedRole)
 
 	grants := []*v2.Grant{}
 	// Get all grants for the role.
