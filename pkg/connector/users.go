@@ -304,7 +304,7 @@ func (o *userBuilder) updateUserProfile(ctx context.Context, args *structpb.Stru
 	user, err := o.client.GetUser(ctx, userID)
 	if err != nil {
 		l.Error("error getting user", zap.Error(err))
-		return nil, nil, fmt.Errorf("failed to get user: %w", err)
+		return nil, nil, status.Errorf(codes.NotFound, "failed to get user: %s", err)
 	}
 	l.Info("updateUserProfile: updating user", zap.String("user", user.Name), zap.String("user_id", user.Id), zap.Any("args", args))
 
