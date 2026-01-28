@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/conductorone/baton-demo/pkg/config"
 )
@@ -40,7 +41,23 @@ type generator struct {
 }
 
 func userId(i int) string {
-	return fmt.Sprintf("user-%07d", i)
+	return fmt.Sprintf("new-user-%07d", i)
+}
+
+func OldId(newId string) string {
+	return strings.TrimPrefix(newId, "new-")
+}
+
+func projectId(i int) string {
+	return fmt.Sprintf("new-project-%07d", i)
+}
+
+func groupId(i int) string {
+	return fmt.Sprintf("new-group-%07d", i)
+}
+
+func roleId(i int) string {
+	return fmt.Sprintf("new-role-%07d", i)
 }
 
 func (g *generator) Next() (*dbResource, bool) {
@@ -77,7 +94,7 @@ func (g *generator) Next() (*dbResource, bool) {
 		}
 		db := &dbResource{
 			Group: &Group{
-				Id:      fmt.Sprintf("group-%07d", g.currentGroup),
+				Id:      groupId(g.currentGroup),
 				Name:    fmt.Sprintf("Group %07d", g.currentGroup),
 				Admins:  groupAdmins,
 				Members: groupMembers,
@@ -89,12 +106,12 @@ func (g *generator) Next() (*dbResource, bool) {
 	if g.currentProject < g.config.Projects {
 		db := &dbResource{
 			Project: &Project{
-				Id:    fmt.Sprintf("project-%07d", g.currentProject),
+				Id:    projectId(g.currentProject),
 				Name:  fmt.Sprintf("Project %07d", g.currentProject),
 				Owner: userId(g.currentProject % g.config.Users),
 				GroupAssignments: []string{
-					fmt.Sprintf("group-%07d", g.currentProject%g.config.Groups),
-					fmt.Sprintf("group-%07d", (g.currentProject*10)%g.config.Groups),
+					groupId(g.currentProject % g.config.Groups),
+					groupId((g.currentProject * 10) % g.config.Groups),
 				},
 			},
 		}
@@ -104,15 +121,15 @@ func (g *generator) Next() (*dbResource, bool) {
 	if g.currentRole < g.config.Roles {
 		db := &dbResource{
 			Role: &Role{
-				Id:   fmt.Sprintf("role-%07d", g.currentRole),
+				Id:   roleId(g.currentRole),
 				Name: fmt.Sprintf("Role %07d", g.currentRole),
 				DirectAssignments: []string{
 					userId(g.currentRole % g.config.Users),
 					userId((g.currentRole * 10) % g.config.Users),
 				},
 				GroupAssignments: []string{
-					fmt.Sprintf("group-%07d", g.currentRole%g.config.Groups),
-					fmt.Sprintf("group-%07d", (g.currentRole*10)%g.config.Groups),
+					groupId(g.currentRole % g.config.Groups),
+					groupId((g.currentRole * 10) % g.config.Groups),
 				},
 			},
 		}

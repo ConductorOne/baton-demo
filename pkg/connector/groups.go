@@ -45,6 +45,15 @@ func groupResource(g *client.Group, parentResourceID *v2.ResourceId) (*v2.Resour
 		g.Id,
 		[]resource.GroupTraitOption{resource.WithGroupProfile(profile)},
 		resource.WithParentResourceID(parentResourceID),
+		resource.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: client.OldId(g.Id),
+					},
+				},
+			},
+		),
 	)
 }
 
@@ -83,10 +92,46 @@ func (o *groupBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, paren
 // Entitlements returns a membership and admin entitlement.
 func (o *groupBuilder) Entitlements(ctx context.Context, resource *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
 	// This entitlement represents being a member of the group, and it can be granted to Users.
-	member := sdkEntitlement.NewAssignmentEntitlement(resource, groupMemberEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
+	member := sdkEntitlement.NewAssignmentEntitlement(
+		resource,
+		groupMemberEntitlement,
+		sdkEntitlement.WithGrantableTo(userResourceType),
+		sdkEntitlement.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: sdkEntitlement.NewEntitlementID(&v2.Resource{
+							Id: &v2.ResourceId{
+								ResourceType: resource.Id.ResourceType,
+								Resource:     client.OldId(resource.Id.Resource),
+							},
+						}, groupMemberEntitlement),
+					},
+				},
+			},
+		),
+	)
 	member.Description = fmt.Sprintf("Is a member of the %s group", resource.DisplayName)
 
-	admin := sdkEntitlement.NewOwnershipEntitlement(resource, groupAdminEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
+	admin := sdkEntitlement.NewOwnershipEntitlement(
+		resource,
+		groupAdminEntitlement,
+		sdkEntitlement.WithGrantableTo(userResourceType),
+		sdkEntitlement.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: sdkEntitlement.NewEntitlementID(&v2.Resource{
+							Id: &v2.ResourceId{
+								ResourceType: resource.Id.ResourceType,
+								Resource:     client.OldId(resource.Id.Resource),
+							},
+						}, groupAdminEntitlement),
+					},
+				},
+			},
+		),
+	)
 	admin.Description = fmt.Sprintf("Is an admin of the %s group", resource.DisplayName)
 
 	return []*v2.Entitlement{member, admin}, nil, nil

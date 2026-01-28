@@ -37,7 +37,22 @@ func roleResource(r *client.Role, parentResourceID *v2.ResourceId) (*v2.Resource
 			"group_assignments":  len(r.GroupAssignments),
 		}),
 	}
-	return resource.NewRoleResource(r.Name, roleResourceType, r.Id, traits, resource.WithParentResourceID(parentResourceID))
+	return resource.NewRoleResource(
+		r.Name,
+		roleResourceType,
+		r.Id,
+		traits,
+		resource.WithParentResourceID(parentResourceID),
+		resource.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: client.OldId(r.Id),
+					},
+				},
+			},
+		),
+	)
 }
 
 // List returns all the roles from the database as resource objects
@@ -76,7 +91,25 @@ func (o *roleBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parent
 // Entitlements returns an assignment entitlement.
 func (o *roleBuilder) Entitlements(_ context.Context, resource *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
 	// This entitlement represents a User or Group being assigned the role
-	assignment := sdkEntitlement.NewAssignmentEntitlement(resource, roleAssignmentEntitlement, sdkEntitlement.WithGrantableTo(userResourceType, groupResourceType))
+	assignment := sdkEntitlement.NewAssignmentEntitlement(
+		resource,
+		roleAssignmentEntitlement,
+		sdkEntitlement.WithGrantableTo(userResourceType, groupResourceType),
+		sdkEntitlement.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: sdkEntitlement.NewEntitlementID(&v2.Resource{
+							Id: &v2.ResourceId{
+								ResourceType: resource.Id.ResourceType,
+								Resource:     client.OldId(resource.Id.Resource),
+							},
+						}, roleAssignmentEntitlement),
+					},
+				},
+			},
+		),
+	)
 	assignment.Description = fmt.Sprintf("Is assigned the %s role", resource.DisplayName)
 
 	return []*v2.Entitlement{assignment}, nil, nil

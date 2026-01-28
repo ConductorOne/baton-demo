@@ -118,6 +118,15 @@ func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource
 		u.Id,
 		traits,
 		resource.WithParentResourceID(parentResourceID),
+		resource.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: client.OldId(u.Id),
+					},
+				},
+			},
+		),
 	)
 }
 

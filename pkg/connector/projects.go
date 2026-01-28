@@ -27,7 +27,21 @@ func (o *projectBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 func projectResource(p *client.Project, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
-	return resource.NewResource(p.Name, projectResourceType, p.Id, resource.WithParentResourceID(parentResourceID))
+	return resource.NewResource(
+		p.Name,
+		projectResourceType,
+		p.Id,
+		resource.WithParentResourceID(parentResourceID),
+		resource.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: client.OldId(p.Id),
+					},
+				},
+			},
+		),
+	)
 }
 
 // List returns all the projects from the database as resource objects
@@ -68,10 +82,46 @@ func (o *projectBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, par
 //   - Ownership of the project, grantable to a user
 //   - Access to the project, grantable to groups
 func (o *projectBuilder) Entitlements(ctx context.Context, r *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
-	access := sdkEntitlement.NewAssignmentEntitlement(r, projectAccessEntitlement, sdkEntitlement.WithGrantableTo(groupResourceType, userResourceType))
+	access := sdkEntitlement.NewAssignmentEntitlement(
+		r,
+		projectAccessEntitlement,
+		sdkEntitlement.WithGrantableTo(groupResourceType, userResourceType),
+		sdkEntitlement.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: sdkEntitlement.NewEntitlementID(&v2.Resource{
+							Id: &v2.ResourceId{
+								ResourceType: r.Id.ResourceType,
+								Resource:     client.OldId(r.Id.Resource),
+							},
+						}, projectAccessEntitlement),
+					},
+				},
+			},
+		),
+	)
 	access.Description = fmt.Sprintf("Has access to the %s project", r.DisplayName)
 
-	owner := sdkEntitlement.NewOwnershipEntitlement(r, projectOwnerEntitlement, sdkEntitlement.WithGrantableTo(userResourceType))
+	owner := sdkEntitlement.NewOwnershipEntitlement(
+		r,
+		projectOwnerEntitlement,
+		sdkEntitlement.WithGrantableTo(userResourceType),
+		sdkEntitlement.WithAnnotation(
+			&v2.Aliases{
+				Id: []*v2.IdAlias{
+					{
+						Id: sdkEntitlement.NewEntitlementID(&v2.Resource{
+							Id: &v2.ResourceId{
+								ResourceType: r.Id.ResourceType,
+								Resource:     client.OldId(r.Id.Resource),
+							},
+						}, projectOwnerEntitlement),
+					},
+				},
+			},
+		),
+	)
 	owner.Description = fmt.Sprintf("Is the owner of the %s project", r.DisplayName)
 
 	return []*v2.Entitlement{access, owner}, nil, nil
