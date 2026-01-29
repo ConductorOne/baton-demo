@@ -256,13 +256,44 @@ func (o *groupBuilder) registerCreateGroupAction(ctx context.Context, registry a
 	err := registry.Register(ctx, &v2.BatonActionSchema{
 		Name: "create",
 		Arguments: []*config.Field{
-			{Name: "name", DisplayName: "Group Name", Field: &config.Field_StringField{}, IsRequired: true},
-			{Name: "admins", DisplayName: "Admins", Field: &config.Field_ResourceIdSliceField{}},
-			{Name: "members", DisplayName: "Members", Field: &config.Field_ResourceIdSliceField{}},
+			{
+				Name:        "name",
+				DisplayName: "Group Name",
+				Field:       &config.Field_StringField{},
+				IsRequired:  true,
+			},
+			{
+				Name:        "admins",
+				DisplayName: "Admins",
+				Field: &config.Field_ResourceIdSliceField{
+					ResourceIdSliceField: &config.ResourceIdSliceField{
+						Rules: &config.RepeatedResourceIdRules{
+							AllowedResourceTypeIds: []string{userResourceType.Id},
+						},
+					},
+				},
+			},
+			{
+				Name:        "members",
+				DisplayName: "Members",
+				Field: &config.Field_ResourceIdSliceField{
+					ResourceIdSliceField: &config.ResourceIdSliceField{
+						Rules: &config.RepeatedResourceIdRules{
+							AllowedResourceTypeIds: []string{userResourceType.Id},
+						},
+					},
+				},
+			},
 		},
 		ReturnTypes: []*config.Field{
 			{Name: "success", Field: &config.Field_BoolField{}},
 			{Name: "resource", Field: &config.Field_ResourceField{}},
+			{Name: "entitlements", Field: &config.Field_EntitlementSliceField{
+				EntitlementSliceField: &config.EntitlementSliceField{},
+			}},
+			{Name: "grants", Field: &config.Field_GrantSliceField{
+				GrantSliceField: &config.GrantSliceField{},
+			}},
 		},
 		ActionType: []v2.ActionType{v2.ActionType_ACTION_TYPE_RESOURCE_CREATE},
 	}, o.handleCreateGroupAction)
@@ -311,17 +342,50 @@ func (o *groupBuilder) handleCreateGroupAction(ctx context.Context, args *struct
 		return nil, nil, err
 	}
 
-	resource, err := groupResource(group, nil)
+	res, err := groupResource(group, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	resourceRv, err := actions.NewResourceReturnField("resource", resource)
+	// Get entitlements for the newly created group
+	entitlements, _, err := o.Entitlements(ctx, res, resource.SyncOpAttrs{})
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return actions.NewReturnValues(true, resourceRv), nil, nil
+	// Get all grants for the newly created group (with pagination)
+	var allGrants []*v2.Grant
+	pageToken := ""
+	for {
+		grants, results, err := o.Grants(ctx, res, resource.SyncOpAttrs{
+			PageToken: pagination.Token{Token: pageToken},
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		allGrants = append(allGrants, grants...)
+		if results == nil || results.NextPageToken == "" {
+			break
+		}
+		pageToken = results.NextPageToken
+	}
+
+	resourceRv, err := actions.NewResourceReturnField("resource", res)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	entitlementsRv, err := actions.NewEntitlementListReturnField("entitlements", entitlements)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	grantsRv, err := actions.NewGrantListReturnField("grants", allGrants)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return actions.NewReturnValues(true, resourceRv, entitlementsRv, grantsRv), nil, nil
 }
 
 func (o *groupBuilder) handleDeleteGroupAction(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
