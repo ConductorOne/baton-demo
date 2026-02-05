@@ -18,6 +18,8 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/segmentio/ksuid"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	// NOTE: required to register the dialect for goqu.
 	//
@@ -405,12 +407,15 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 			}
 		}
 	}
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
 
 	q := c.db.From(users.Name()).Prepared(true)
 	q = q.Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at").
 		Order(goqu.C("id").Asc()).
-		Limit(uint(limit)).  //nolint:gosec // This won't underflow
-		Offset(uint(offset)) //nolint:gosec // This won't underflow
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
 	if err != nil {
@@ -446,31 +451,36 @@ func (c *Client) ListUsersByUpdatedAt(ctx context.Context, updatedAt time.Time, 
 		return nil, "", err
 	}
 
-	limit := sToken.Size
+	limit := 50
+	offset := 0
+	if sToken != nil {
+		limit = sToken.Size
+		if sToken.Cursor != "" {
+			offset, err = strconv.Atoi(sToken.Cursor)
+			if err != nil {
+				return nil, "", err
+			}
+		}
+	}
 	if limit <= 0 {
 		limit = 50
 	}
 	if limit > 100 {
 		limit = 100
 	}
+
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
+
 	updatedAtStr := updatedAt.Format(time.RFC3339Nano)
-	offset := 0
-	if sToken.Cursor != "" {
-		offset, err = strconv.Atoi(sToken.Cursor)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	if offset <= 0 {
-		offset = 0
-	}
 
 	q := c.db.From(users.Name()).Prepared(true).
 		Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at").
 		Where(goqu.C("updated_at").Gt(updatedAtStr)).
 		Order(goqu.C("updated_at").Desc()).
-		Limit(uint(limit)).  //nolint:gosec // This won't underflow
-		Offset(uint(offset)) //nolint:gosec // This won't underflow
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
 	if err != nil {

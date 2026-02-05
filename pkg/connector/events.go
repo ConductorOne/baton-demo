@@ -33,7 +33,10 @@ func (d *userEventFeed) ListEvents(
 ) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
 	events := []*v2.Event{}
 
-	occurredAt := earliestEvent.AsTime()
+	var occurredAt time.Time
+	if earliestEvent != nil {
+		occurredAt = earliestEvent.AsTime()
+	}
 	users, nextPageToken, err := d.client.ListUsersByUpdatedAt(ctx, occurredAt, sToken)
 	if err != nil {
 		return nil, nil, nil, err
