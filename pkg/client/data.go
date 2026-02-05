@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/conductorone/baton-demo/pkg/config"
 )
@@ -149,13 +150,15 @@ func (g *generator) Next() (*dbResource, bool) {
 	}
 	if g.currentUser < g.config.Users {
 		userFullName := fmt.Sprintf("User %07d", g.currentUser)
-		userEmail := fmt.Sprintf("user-%d@example.com", g.currentUser)
+		userEmail := fmt.Sprintf("user-%07d@example.com", g.currentUser)
 		db := &dbResource{
 			User: &User{
-				Id:      userId(g.currentUser),
-				Name:    userFullName,
-				Email:   userEmail,
-				Enabled: true, // Default to enabled
+				Id:        userId(g.currentUser),
+				Name:      userFullName,
+				Email:     userEmail,
+				Enabled:   true, // Default to enabled
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
 				Attrs: map[string]string{
 					"full_name": userFullName,
 					"email":     userEmail,
@@ -204,7 +207,15 @@ func (t *usersTable) Name() string {
 
 func (t *usersTable) Schema() ([]string, []any) {
 	return []string{
-		"CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT, enabled BOOLEAN DEFAULT 1, attrs BLOB)",
+		`CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY, 
+			name TEXT NOT NULL UNIQUE, 
+			email TEXT, 
+			enabled BOOLEAN DEFAULT 1, 
+			attrs BLOB, 
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, 
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}, []any{}
 }
 

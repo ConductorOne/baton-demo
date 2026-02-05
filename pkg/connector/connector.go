@@ -15,6 +15,15 @@ type Demo struct {
 	client *client.Client
 }
 
+var _ connectorbuilder.EventFeedsLimited = (*Demo)(nil)
+var _ connectorbuilder.ConnectorBuilderV2 = (*Demo)(nil)
+
+func (d *Demo) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
+	return []connectorbuilder.EventFeed{
+		newUserEventFeed(d.client),
+	}
+}
+
 // ResourceSyncers returns a ResourceSyncer for each resource type that should be synced from the upstream service.
 func (d *Demo) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
 	return []connectorbuilder.ResourceSyncerV2{

@@ -35,11 +35,13 @@ import (
 // Projects always have a single User as the owner, and can be assigned to Groups
 
 type User struct {
-	Id      string
-	Name    string
-	Email   string
-	Enabled bool
-	Attrs   map[string]string
+	Id        string
+	Name      string
+	Email     string
+	Enabled   bool
+	Attrs     map[string]string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Group struct {
@@ -226,12 +228,16 @@ func (c *Client) initDB(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			createdAt := dbResource.User.CreatedAt.Format(time.RFC3339Nano)
+			updatedAt := dbResource.User.UpdatedAt.Format(time.RFC3339Nano)
 			row := goqu.Record{
-				"id":      dbResource.User.Id,
-				"name":    dbResource.User.Name,
-				"email":   dbResource.User.Email,
-				"enabled": dbResource.User.Enabled,
-				"attrs":   attrs,
+				"id":         dbResource.User.Id,
+				"name":       dbResource.User.Name,
+				"email":      dbResource.User.Email,
+				"enabled":    dbResource.User.Enabled,
+				"attrs":      attrs,
+				"created_at": createdAt,
+				"updated_at": updatedAt,
 			}
 			baseUserQ := c.db.Insert(users.Name()).Prepared(true)
 			baseUserQ = baseUserQ.Rows(row)
@@ -341,6 +347,43 @@ func (c *Client) initDB(ctx context.Context) error {
 	return nil
 }
 
+type scannable interface {
+	Scan(dest ...any) error
+}
+
+func (c *Client) rowToUser(ctx context.Context, row scannable) (*User, error) {
+	user := &User{}
+	attrsBytes := []byte{}
+	var createdAt, updatedAt string
+	err := row.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if len(attrsBytes) > 0 {
+		err = json.Unmarshal(attrsBytes, &user.Attrs)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		user.Attrs = make(map[string]string)
+	}
+	if createdAt != "" {
+		createdAtTime, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, err
+		}
+		user.CreatedAt = createdAtTime
+	}
+	if updatedAt != "" {
+		updatedAtTime, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			return nil, err
+		}
+		user.UpdatedAt = updatedAtTime
+	}
+	return user, nil
+}
+
 // ListUsers returns all the users from the database.
 func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*User, string, error) {
 	err := c.validateDB()
@@ -364,7 +407,7 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email", "enabled", "attrs").
+	q = q.Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at").
 		Order(goqu.C("id").Asc()).
 		Limit(uint(limit)).  //nolint:gosec // This won't underflow
 		Offset(uint(offset)) //nolint:gosec // This won't underflow
@@ -382,19 +425,69 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 
 	usersList := []*User{}
 	for rows.Next() {
-		user := &User{}
-		attrsBytes := []byte{}
-		err = rows.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes)
+		user, err := c.rowToUser(ctx, rows)
 		if err != nil {
 			return nil, "", err
 		}
-		if len(attrsBytes) > 0 {
-			err = json.Unmarshal(attrsBytes, &user.Attrs)
-			if err != nil {
-				return nil, "", err
-			}
-		} else {
-			user.Attrs = make(map[string]string)
+		usersList = append(usersList, user)
+	}
+
+	nextPageToken := ""
+	if len(usersList) == limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+
+	return usersList, nextPageToken, nil
+}
+
+func (c *Client) ListUsersByUpdatedAt(ctx context.Context, updatedAt time.Time, sToken *pagination.StreamToken) ([]*User, string, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, "", err
+	}
+
+	limit := sToken.Size
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	updatedAtStr := updatedAt.Format(time.RFC3339Nano)
+	offset := 0
+	if sToken.Cursor != "" {
+		offset, err = strconv.Atoi(sToken.Cursor)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if offset <= 0 {
+		offset = 0
+	}
+
+	q := c.db.From(users.Name()).Prepared(true).
+		Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at").
+		Where(goqu.C("updated_at").Gt(updatedAtStr)).
+		Order(goqu.C("updated_at").Desc()).
+		Limit(uint(limit)).  //nolint:gosec // This won't underflow
+		Offset(uint(offset)) //nolint:gosec // This won't underflow
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	usersList := []*User{}
+	for rows.Next() {
+		user, err := c.rowToUser(ctx, rows)
+		if err != nil {
+			return nil, "", err
 		}
 		usersList = append(usersList, user)
 	}
@@ -415,7 +508,7 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email", "enabled", "attrs")
+	q = q.Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at")
 	q = q.Where(goqu.C("id").Eq(userID))
 
 	query, args, err := q.ToSQL()
@@ -424,20 +517,9 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	}
 
 	row := c.db.QueryRowContext(ctx, query, args...)
-	user := &User{}
-	attrsBytes := []byte{}
-	err = row.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes)
+	user, err := c.rowToUser(ctx, row)
 	if err != nil {
 		return nil, err
-	}
-
-	if len(attrsBytes) > 0 {
-		err = json.Unmarshal(attrsBytes, &user.Attrs)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		user.Attrs = make(map[string]string)
 	}
 
 	return user, nil
@@ -478,12 +560,15 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 		return nil, err
 	}
 
+	now := time.Now()
 	user := &User{
-		Id:      ksuid.New().String(),
-		Name:    name,
-		Email:   email,
-		Enabled: true, // Default to enabled
-		Attrs:   make(map[string]string),
+		Id:        ksuid.New().String(),
+		Name:      name,
+		Email:     email,
+		Enabled:   true, // Default to enabled
+		Attrs:     make(map[string]string),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	attrs, err := json.Marshal(user.Attrs)
@@ -493,11 +578,13 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 
 	q := c.db.Insert(users.Name()).Prepared(true)
 	q = q.Rows(goqu.Record{
-		"id":      user.Id,
-		"name":    user.Name,
-		"email":   user.Email,
-		"enabled": user.Enabled,
-		"attrs":   attrs,
+		"id":         user.Id,
+		"name":       user.Name,
+		"email":      user.Email,
+		"enabled":    user.Enabled,
+		"attrs":      attrs,
+		"created_at": user.CreatedAt.Format(time.RFC3339Nano),
+		"updated_at": user.UpdatedAt.Format(time.RFC3339Nano),
 	})
 
 	query, args, err := q.ToSQL()
@@ -539,12 +626,15 @@ func (c *Client) UpdateUser(ctx context.Context, user *User) error {
 		return err
 	}
 
+	now := time.Now()
 	q := c.db.Update(users.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
-		"name":    user.Name,
-		"email":   user.Email,
-		"enabled": user.Enabled,
-		"attrs":   attrs,
+		"name":       user.Name,
+		"email":      user.Email,
+		"enabled":    user.Enabled,
+		"attrs":      attrs,
+		"created_at": user.CreatedAt.Format(time.RFC3339Nano),
+		"updated_at": now.Format(time.RFC3339Nano),
 	})
 	q = q.Where(goqu.C("id").Eq(user.Id))
 
