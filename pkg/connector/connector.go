@@ -21,6 +21,10 @@ var _ connectorbuilder.ConnectorBuilderV2 = (*Demo)(nil)
 func (d *Demo) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
 	return []connectorbuilder.EventFeed{
 		newUserEventFeed(d.client),
+		newGroupEventFeed(d.client),
+		newRoleEventFeed(d.client),
+		newProjectEventFeed(d.client),
+		newScopedRoleEventFeed(d.client),
 	}
 }
 
