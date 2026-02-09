@@ -640,7 +640,6 @@ func (c *Client) UpdateUser(ctx context.Context, user *User) error {
 		"email":      user.Email,
 		"enabled":    user.Enabled,
 		"attrs":      attrs,
-		"created_at": user.CreatedAt,
 		"updated_at": now,
 	})
 	q = q.Where(goqu.C("id").Eq(user.Id))
