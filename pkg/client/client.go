@@ -18,6 +18,8 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/segmentio/ksuid"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	// NOTE: required to register the dialect for goqu.
 	//
@@ -34,19 +36,28 @@ import (
 // ScopedRoles are roles that are scoped to a project
 // Projects always have a single User as the owner, and can be assigned to Groups
 
+const (
+	minEvents = 50
+	maxEvents = 100
+)
+
 type User struct {
-	Id      string
-	Name    string
-	Email   string
-	Enabled bool
-	Attrs   map[string]string
+	Id        string
+	Name      string
+	Email     string
+	Enabled   bool
+	Attrs     map[string]string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Group struct {
-	Id      string
-	Name    string
-	Admins  []string
-	Members []string
+	Id        string
+	Name      string
+	Admins    []string
+	Members   []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Role struct {
@@ -54,6 +65,8 @@ type Role struct {
 	Name              string
 	DirectAssignments []string
 	GroupAssignments  []string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type ScopedRole struct {
@@ -61,6 +74,8 @@ type ScopedRole struct {
 	ProjectId       string
 	RoleId          string
 	UserAssignments []string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type Project struct {
@@ -68,6 +83,8 @@ type Project struct {
 	Name             string
 	Owner            string
 	GroupAssignments []string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type Password struct {
@@ -227,11 +244,13 @@ func (c *Client) initDB(ctx context.Context) error {
 				return err
 			}
 			row := goqu.Record{
-				"id":      dbResource.User.Id,
-				"name":    dbResource.User.Name,
-				"email":   dbResource.User.Email,
-				"enabled": dbResource.User.Enabled,
-				"attrs":   attrs,
+				"id":         dbResource.User.Id,
+				"name":       dbResource.User.Name,
+				"email":      dbResource.User.Email,
+				"enabled":    dbResource.User.Enabled,
+				"attrs":      attrs,
+				"created_at": dbResource.User.CreatedAt,
+				"updated_at": dbResource.User.UpdatedAt,
 			}
 			baseUserQ := c.db.Insert(users.Name()).Prepared(true)
 			baseUserQ = baseUserQ.Rows(row)
@@ -246,10 +265,12 @@ func (c *Client) initDB(ctx context.Context) error {
 			}
 		case dbResource.Group != nil:
 			row := goqu.Record{
-				"id":      dbResource.Group.Id,
-				"name":    dbResource.Group.Name,
-				"admins":  strings.Join(dbResource.Group.Admins, ","),
-				"members": strings.Join(dbResource.Group.Members, ","),
+				"id":         dbResource.Group.Id,
+				"name":       dbResource.Group.Name,
+				"admins":     strings.Join(dbResource.Group.Admins, ","),
+				"members":    strings.Join(dbResource.Group.Members, ","),
+				"created_at": dbResource.Group.CreatedAt,
+				"updated_at": dbResource.Group.UpdatedAt,
 			}
 			baseGroupQ := c.db.Insert(groups.Name()).Prepared(true)
 			baseGroupQ = baseGroupQ.Rows(row)
@@ -268,6 +289,8 @@ func (c *Client) initDB(ctx context.Context) error {
 				"name":               dbResource.Role.Name,
 				"direct_assignments": strings.Join(dbResource.Role.DirectAssignments, ","),
 				"group_assignments":  strings.Join(dbResource.Role.GroupAssignments, ","),
+				"created_at":         dbResource.Role.CreatedAt,
+				"updated_at":         dbResource.Role.UpdatedAt,
 			}
 			baseRoleQ := c.db.Insert(roles.Name()).Prepared(true)
 			baseRoleQ = baseRoleQ.Rows(row)
@@ -286,6 +309,8 @@ func (c *Client) initDB(ctx context.Context) error {
 				"project_id":       dbResource.ScopedRole.ProjectId,
 				"role_id":          dbResource.ScopedRole.RoleId,
 				"user_assignments": strings.Join(dbResource.ScopedRole.UserAssignments, ","),
+				"created_at":       dbResource.ScopedRole.CreatedAt,
+				"updated_at":       dbResource.ScopedRole.UpdatedAt,
 			}
 			baseScopedRoleQ := c.db.Insert(scopedRoles.Name()).Prepared(true)
 			baseScopedRoleQ = baseScopedRoleQ.Rows(row)
@@ -304,6 +329,8 @@ func (c *Client) initDB(ctx context.Context) error {
 				"name":              dbResource.Project.Name,
 				"owner":             dbResource.Project.Owner,
 				"group_assignments": strings.Join(dbResource.Project.GroupAssignments, ","),
+				"created_at":        dbResource.Project.CreatedAt,
+				"updated_at":        dbResource.Project.UpdatedAt,
 			}
 			baseProjectQ := c.db.Insert(projects.Name()).Prepared(true)
 			baseProjectQ = baseProjectQ.Rows(row)
@@ -341,6 +368,28 @@ func (c *Client) initDB(ctx context.Context) error {
 	return nil
 }
 
+type scannable interface {
+	Scan(dest ...any) error
+}
+
+func (c *Client) rowToUser(_ context.Context, row scannable) (*User, error) {
+	user := &User{}
+	attrsBytes := []byte{}
+	err := row.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes, &user.CreatedAt, &user.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if len(attrsBytes) > 0 {
+		err = json.Unmarshal(attrsBytes, &user.Attrs)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		user.Attrs = make(map[string]string)
+	}
+	return user, nil
+}
+
 // ListUsers returns all the users from the database.
 func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*User, string, error) {
 	err := c.validateDB()
@@ -362,12 +411,15 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 			}
 		}
 	}
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email", "enabled", "attrs").
+	q = q.Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at").
 		Order(goqu.C("id").Asc()).
-		Limit(uint(limit)).  //nolint:gosec // This won't underflow
-		Offset(uint(offset)) //nolint:gosec // This won't underflow
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
 	if err != nil {
@@ -382,19 +434,67 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 
 	usersList := []*User{}
 	for rows.Next() {
-		user := &User{}
-		attrsBytes := []byte{}
-		err = rows.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes)
+		user, err := c.rowToUser(ctx, rows)
 		if err != nil {
 			return nil, "", err
 		}
-		if len(attrsBytes) > 0 {
-			err = json.Unmarshal(attrsBytes, &user.Attrs)
+		usersList = append(usersList, user)
+	}
+
+	nextPageToken := ""
+	if len(usersList) == limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+
+	return usersList, nextPageToken, nil
+}
+
+func (c *Client) ListUsersByUpdatedAt(ctx context.Context, updatedAt time.Time, sToken *pagination.StreamToken) ([]*User, string, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, "", err
+	}
+
+	limit := 50
+	offset := 0
+	if sToken != nil {
+		limit = sToken.Size
+		if sToken.Cursor != "" {
+			offset, err = strconv.Atoi(sToken.Cursor)
 			if err != nil {
 				return nil, "", err
 			}
-		} else {
-			user.Attrs = make(map[string]string)
+		}
+	}
+	limit = min(max(limit, minEvents), maxEvents)
+
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
+
+	q := c.db.From(users.Name()).Prepared(true).
+		Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at").
+		Where(goqu.C("updated_at").Gt(updatedAt)).
+		Order(goqu.C("updated_at").Desc()).
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	usersList := []*User{}
+	for rows.Next() {
+		user, err := c.rowToUser(ctx, rows)
+		if err != nil {
+			return nil, "", err
 		}
 		usersList = append(usersList, user)
 	}
@@ -415,7 +515,7 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email", "enabled", "attrs")
+	q = q.Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at")
 	q = q.Where(goqu.C("id").Eq(userID))
 
 	query, args, err := q.ToSQL()
@@ -424,20 +524,9 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	}
 
 	row := c.db.QueryRowContext(ctx, query, args...)
-	user := &User{}
-	attrsBytes := []byte{}
-	err = row.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes)
+	user, err := c.rowToUser(ctx, row)
 	if err != nil {
 		return nil, err
-	}
-
-	if len(attrsBytes) > 0 {
-		err = json.Unmarshal(attrsBytes, &user.Attrs)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		user.Attrs = make(map[string]string)
 	}
 
 	return user, nil
@@ -478,12 +567,15 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 		return nil, err
 	}
 
+	now := time.Now()
 	user := &User{
-		Id:      ksuid.New().String(),
-		Name:    name,
-		Email:   email,
-		Enabled: true, // Default to enabled
-		Attrs:   make(map[string]string),
+		Id:        ksuid.New().String(),
+		Name:      name,
+		Email:     email,
+		Enabled:   true, // Default to enabled
+		Attrs:     make(map[string]string),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	attrs, err := json.Marshal(user.Attrs)
@@ -493,11 +585,13 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 
 	q := c.db.Insert(users.Name()).Prepared(true)
 	q = q.Rows(goqu.Record{
-		"id":      user.Id,
-		"name":    user.Name,
-		"email":   user.Email,
-		"enabled": user.Enabled,
-		"attrs":   attrs,
+		"id":         user.Id,
+		"name":       user.Name,
+		"email":      user.Email,
+		"enabled":    user.Enabled,
+		"attrs":      attrs,
+		"created_at": user.CreatedAt,
+		"updated_at": user.UpdatedAt,
 	})
 
 	query, args, err := q.ToSQL()
@@ -539,12 +633,14 @@ func (c *Client) UpdateUser(ctx context.Context, user *User) error {
 		return err
 	}
 
+	now := time.Now()
 	q := c.db.Update(users.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
-		"name":    user.Name,
-		"email":   user.Email,
-		"enabled": user.Enabled,
-		"attrs":   attrs,
+		"name":       user.Name,
+		"email":      user.Email,
+		"enabled":    user.Enabled,
+		"attrs":      attrs,
+		"updated_at": now,
 	})
 	q = q.Where(goqu.C("id").Eq(user.Id))
 
@@ -592,6 +688,24 @@ func (c *Client) ChangePassword(ctx context.Context, userID, password string) er
 	return nil
 }
 
+func (c *Client) rowToGroup(_ context.Context, row scannable) (*Group, error) {
+	group := &Group{}
+	admins := ""
+	members := ""
+	err := row.Scan(&group.Id, &group.Name, &admins, &members, &group.CreatedAt, &group.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	if admins != "" {
+		group.Admins = strings.Split(admins, ",")
+	}
+	if members != "" {
+		group.Members = strings.Split(members, ",")
+	}
+	return group, nil
+}
+
 // ListGroups returns all the groups from the database.
 func (c *Client) ListGroups(ctx context.Context) ([]*Group, error) {
 	err := c.validateDB()
@@ -600,7 +714,7 @@ func (c *Client) ListGroups(ctx context.Context) ([]*Group, error) {
 	}
 
 	q := c.db.From(groups.Name()).Prepared(true)
-	q = q.Select("id", "name", "admins", "members")
+	q = q.Select("id", "name", "admins", "members", "created_at", "updated_at")
 
 	query, args, err := q.ToSQL()
 	if err != nil {
@@ -615,19 +729,9 @@ func (c *Client) ListGroups(ctx context.Context) ([]*Group, error) {
 
 	groupsList := []*Group{}
 	for rows.Next() {
-		group := &Group{}
-		admins := ""
-		members := ""
-		err = rows.Scan(&group.Id, &group.Name, &admins, &members)
+		group, err := c.rowToGroup(ctx, rows)
 		if err != nil {
 			return nil, err
-		}
-
-		if admins != "" {
-			group.Admins = strings.Split(admins, ",")
-		}
-		if members != "" {
-			group.Members = strings.Split(members, ",")
 		}
 		groupsList = append(groupsList, group)
 	}
@@ -643,7 +747,7 @@ func (c *Client) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	}
 
 	q := c.db.From(groups.Name()).Prepared(true)
-	q = q.Select("id", "name", "admins", "members")
+	q = q.Select("id", "name", "admins", "members", "created_at", "updated_at")
 	q = q.Where(goqu.C("id").Eq(groupID))
 
 	query, args, err := q.ToSQL()
@@ -652,22 +756,7 @@ func (c *Client) GetGroup(ctx context.Context, groupID string) (*Group, error) {
 	}
 
 	row := c.db.QueryRowContext(ctx, query, args...)
-	group := &Group{}
-	admins := ""
-	members := ""
-	err = row.Scan(&group.Id, &group.Name, &admins, &members)
-	if err != nil {
-		return nil, err
-	}
-
-	if admins != "" {
-		group.Admins = strings.Split(admins, ",")
-	}
-	if members != "" {
-		group.Members = strings.Split(members, ",")
-	}
-
-	return group, nil
+	return c.rowToGroup(ctx, row)
 }
 
 func (c *Client) CreateGroup(ctx context.Context, groupID, groupName string, groupAdmins []string, groupMembers []string) (*Group, error) {
@@ -692,11 +781,14 @@ func (c *Client) CreateGroup(ctx context.Context, groupID, groupName string, gro
 	if len(groupMembers) > 0 {
 		members = strings.Join(groupMembers, ",")
 	}
+	now := time.Now()
 	row := goqu.Record{
-		"id":      groupID,
-		"name":    groupName,
-		"admins":  admins,
-		"members": members,
+		"id":         groupID,
+		"name":       groupName,
+		"admins":     admins,
+		"members":    members,
+		"created_at": now,
+		"updated_at": now,
 	}
 	baseGroupQ := c.db.Insert(groups.Name()).Prepared(true)
 	baseGroupQ = baseGroupQ.Rows(row)
@@ -772,7 +864,8 @@ func (c *Client) GrantGroupMember(ctx context.Context, groupID, userID string) e
 	group.Members = append(group.Members, userID)
 	q := c.db.Update(groups.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
-		"members": strings.Join(group.Members, ","),
+		"members":    strings.Join(group.Members, ","),
+		"updated_at": time.Now(),
 	})
 	q = q.Where(goqu.C("id").Eq(groupID))
 
@@ -818,7 +911,8 @@ func (c *Client) RevokeGroupMember(ctx context.Context, groupID, userID string) 
 
 	q := c.db.Update(groups.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
-		"members": strings.Join(group.Members, ","),
+		"members":    strings.Join(group.Members, ","),
+		"updated_at": time.Now(),
 	})
 	q = q.Where(goqu.C("id").Eq(groupID))
 
@@ -855,7 +949,8 @@ func (c *Client) GrantGroupAdmin(ctx context.Context, groupID, userID string) er
 
 	q := c.db.Update(groups.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
-		"admins": strings.Join(group.Admins, ","),
+		"admins":     strings.Join(group.Admins, ","),
+		"updated_at": time.Now(),
 	})
 	q = q.Where(goqu.C("id").Eq(groupID))
 
@@ -901,7 +996,8 @@ func (c *Client) RevokeGroupAdmin(ctx context.Context, groupID, userID string) e
 
 	q := c.db.Update(groups.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
-		"admins": strings.Join(group.Admins, ","),
+		"admins":     strings.Join(group.Admins, ","),
+		"updated_at": time.Now(),
 	})
 	q = q.Where(goqu.C("id").Eq(groupID))
 
@@ -918,6 +1014,24 @@ func (c *Client) RevokeGroupAdmin(ctx context.Context, groupID, userID string) e
 	return nil
 }
 
+func (c *Client) rowToRole(_ context.Context, row scannable) (*Role, error) {
+	role := &Role{}
+	directAssignments := ""
+	groupAssignments := ""
+	err := row.Scan(&role.Id, &role.Name, &directAssignments, &groupAssignments, &role.CreatedAt, &role.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	if directAssignments != "" {
+		role.DirectAssignments = strings.Split(directAssignments, ",")
+	}
+	if groupAssignments != "" {
+		role.GroupAssignments = strings.Split(groupAssignments, ",")
+	}
+	return role, nil
+}
+
 // ListRoles returns all the roles from the database.
 func (c *Client) ListRoles(ctx context.Context) ([]*Role, error) {
 	err := c.validateDB()
@@ -926,7 +1040,7 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, error) {
 	}
 
 	q := c.db.From(roles.Name()).Prepared(true)
-	q = q.Select("id", "name", "direct_assignments", "group_assignments")
+	q = q.Select("id", "name", "direct_assignments", "group_assignments", "created_at", "updated_at")
 
 	query, args, err := q.ToSQL()
 	if err != nil {
@@ -941,19 +1055,9 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, error) {
 
 	rolesList := []*Role{}
 	for rows.Next() {
-		role := &Role{}
-		directAssignments := ""
-		groupAssignments := ""
-		err = rows.Scan(&role.Id, &role.Name, &directAssignments, &groupAssignments)
+		role, err := c.rowToRole(ctx, rows)
 		if err != nil {
 			return nil, err
-		}
-
-		if directAssignments != "" {
-			role.DirectAssignments = strings.Split(directAssignments, ",")
-		}
-		if groupAssignments != "" {
-			role.GroupAssignments = strings.Split(groupAssignments, ",")
 		}
 		rolesList = append(rolesList, role)
 	}
@@ -969,7 +1073,7 @@ func (c *Client) GetRole(ctx context.Context, roleID string) (*Role, error) {
 	}
 
 	q := c.db.From(roles.Name()).Prepared(true)
-	q = q.Select("id", "name", "direct_assignments", "group_assignments")
+	q = q.Select("id", "name", "direct_assignments", "group_assignments", "created_at", "updated_at")
 	q = q.Where(goqu.C("id").Eq(roleID))
 
 	query, args, err := q.ToSQL()
@@ -978,22 +1082,7 @@ func (c *Client) GetRole(ctx context.Context, roleID string) (*Role, error) {
 	}
 
 	row := c.db.QueryRowContext(ctx, query, args...)
-	role := &Role{}
-	directAssignments := ""
-	groupAssignments := ""
-	err = row.Scan(&role.Id, &role.Name, &directAssignments, &groupAssignments)
-	if err != nil {
-		return nil, err
-	}
-
-	if directAssignments != "" {
-		role.DirectAssignments = strings.Split(directAssignments, ",")
-	}
-	if groupAssignments != "" {
-		role.GroupAssignments = strings.Split(groupAssignments, ",")
-	}
-
-	return role, nil
+	return c.rowToRole(ctx, row)
 }
 
 func (c *Client) GrantRole(ctx context.Context, userID, roleID string) error {
@@ -1025,6 +1114,7 @@ func (c *Client) GrantRole(ctx context.Context, userID, roleID string) error {
 	q := c.db.Update(roles.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
 		"direct_assignments": strings.Join(role.DirectAssignments, ","),
+		"updated_at":         time.Now(),
 	})
 	q = q.Where(goqu.C("id").Eq(roleID))
 
@@ -1076,6 +1166,7 @@ func (c *Client) RevokeRole(ctx context.Context, userID, roleID string) error {
 	q := c.db.Update(roles.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
 		"direct_assignments": strings.Join(role.DirectAssignments, ","),
+		"updated_at":         time.Now(),
 	})
 	q = q.Where(goqu.C("id").Eq(roleID))
 
@@ -1091,6 +1182,19 @@ func (c *Client) RevokeRole(ctx context.Context, userID, roleID string) error {
 	return nil
 }
 
+func (c *Client) rowToScopedRole(_ context.Context, row scannable) (*ScopedRole, error) {
+	scopedRole := &ScopedRole{}
+	userAssignments := ""
+	err := row.Scan(&scopedRole.Id, &scopedRole.ProjectId, &scopedRole.RoleId, &userAssignments, &scopedRole.CreatedAt, &scopedRole.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	if userAssignments != "" {
+		scopedRole.UserAssignments = strings.Split(userAssignments, ",")
+	}
+	return scopedRole, nil
+}
+
 func (c *Client) ListScopedRoles(ctx context.Context) ([]*ScopedRole, error) {
 	err := c.validateDB()
 	if err != nil {
@@ -1098,7 +1202,7 @@ func (c *Client) ListScopedRoles(ctx context.Context) ([]*ScopedRole, error) {
 	}
 
 	q := c.db.From(scopedRoles.Name()).Prepared(true)
-	q = q.Select("id", "project_id", "role_id", "user_assignments")
+	q = q.Select("id", "project_id", "role_id", "user_assignments", "created_at", "updated_at")
 
 	query, args, err := q.ToSQL()
 	if err != nil {
@@ -1113,14 +1217,9 @@ func (c *Client) ListScopedRoles(ctx context.Context) ([]*ScopedRole, error) {
 
 	scopedRolesList := []*ScopedRole{}
 	for rows.Next() {
-		scopedRole := &ScopedRole{}
-		userAssignments := ""
-		err = rows.Scan(&scopedRole.Id, &scopedRole.ProjectId, &scopedRole.RoleId, &userAssignments)
+		scopedRole, err := c.rowToScopedRole(ctx, rows)
 		if err != nil {
 			return nil, err
-		}
-		if userAssignments != "" {
-			scopedRole.UserAssignments = strings.Split(userAssignments, ",")
 		}
 		scopedRolesList = append(scopedRolesList, scopedRole)
 	}
@@ -1135,7 +1234,7 @@ func (c *Client) GetScopedRole(ctx context.Context, roleID, projectID string) (*
 	}
 
 	q := c.db.From(scopedRoles.Name()).Prepared(true)
-	q = q.Select("id", "project_id", "role_id", "user_assignments")
+	q = q.Select("id", "project_id", "role_id", "user_assignments", "created_at", "updated_at")
 	q = q.Where(goqu.C("role_id").Eq(roleID), goqu.C("project_id").Eq(projectID))
 
 	query, args, err := q.ToSQL()
@@ -1144,16 +1243,7 @@ func (c *Client) GetScopedRole(ctx context.Context, roleID, projectID string) (*
 	}
 
 	row := c.db.QueryRowContext(ctx, query, args...)
-	scopedRole := &ScopedRole{}
-	userAssignments := ""
-	err = row.Scan(&scopedRole.Id, &scopedRole.ProjectId, &scopedRole.RoleId, &userAssignments)
-	if err != nil {
-		return nil, err
-	}
-	if userAssignments != "" {
-		scopedRole.UserAssignments = strings.Split(userAssignments, ",")
-	}
-	return scopedRole, nil
+	return c.rowToScopedRole(ctx, row)
 }
 
 func (c *Client) CreateScopedRole(ctx context.Context, scopedRole *ScopedRole) error {
@@ -1162,11 +1252,16 @@ func (c *Client) CreateScopedRole(ctx context.Context, scopedRole *ScopedRole) e
 		return err
 	}
 
+	now := time.Now()
+	scopedRole.CreatedAt = now
+	scopedRole.UpdatedAt = now
 	row := goqu.Record{
 		"id":               scopedRole.Id,
 		"project_id":       scopedRole.ProjectId,
 		"role_id":          scopedRole.RoleId,
 		"user_assignments": strings.Join(scopedRole.UserAssignments, ","),
+		"created_at":       scopedRole.CreatedAt,
+		"updated_at":       scopedRole.UpdatedAt,
 	}
 	baseScopedRoleQ := c.db.Insert(scopedRoles.Name()).Prepared(true)
 	baseScopedRoleQ = baseScopedRoleQ.Rows(row)
@@ -1182,7 +1277,7 @@ func (c *Client) CreateScopedRole(ctx context.Context, scopedRole *ScopedRole) e
 	return nil
 }
 
-func (c *Client) UpdateScopedRole(ctx context.Context, scopedRole *ScopedRole) error {
+func (c *Client) UpdateScopedRole(_ context.Context, scopedRole *ScopedRole) error {
 	err := c.validateDB()
 	if err != nil {
 		return err
@@ -1191,6 +1286,7 @@ func (c *Client) UpdateScopedRole(ctx context.Context, scopedRole *ScopedRole) e
 	q := c.db.Update(scopedRoles.Name()).Prepared(true)
 	q = q.Set(goqu.Record{
 		"user_assignments": strings.Join(scopedRole.UserAssignments, ","),
+		"updated_at":       time.Now(),
 	})
 	q = q.Where(goqu.C("id").Eq(scopedRole.Id))
 	query, args, err := q.ToSQL()
@@ -1204,7 +1300,7 @@ func (c *Client) UpdateScopedRole(ctx context.Context, scopedRole *ScopedRole) e
 	return nil
 }
 
-func (c *Client) DeleteScopedRole(ctx context.Context, roleID, projectID string) error {
+func (c *Client) DeleteScopedRole(_ context.Context, roleID, projectID string) error {
 	err := c.validateDB()
 	if err != nil {
 		return err
@@ -1223,6 +1319,20 @@ func (c *Client) DeleteScopedRole(ctx context.Context, roleID, projectID string)
 	return nil
 }
 
+func (c *Client) rowToProject(_ context.Context, row scannable) (*Project, error) {
+	project := &Project{}
+	groupAssignments := ""
+	err := row.Scan(&project.Id, &project.Name, &project.Owner, &groupAssignments, &project.CreatedAt, &project.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	if groupAssignments != "" {
+		project.GroupAssignments = strings.Split(groupAssignments, ",")
+	}
+	return project, nil
+}
+
 // ListProjects returns all the projects from the database.
 func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 	err := c.validateDB()
@@ -1231,7 +1341,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 	}
 
 	q := c.db.From(projects.Name()).Prepared(true)
-	q = q.Select("id", "name", "owner", "group_assignments")
+	q = q.Select("id", "name", "owner", "group_assignments", "created_at", "updated_at")
 
 	query, args, err := q.ToSQL()
 	if err != nil {
@@ -1246,14 +1356,10 @@ func (c *Client) ListProjects(ctx context.Context) ([]*Project, error) {
 
 	projectsList := []*Project{}
 	for rows.Next() {
-		project := &Project{}
-		groupAssignments := ""
-		err = rows.Scan(&project.Id, &project.Name, &project.Owner, &groupAssignments)
+		project, err := c.rowToProject(ctx, rows)
 		if err != nil {
 			return nil, err
 		}
-
-		project.GroupAssignments = strings.Split(groupAssignments, ",")
 		projectsList = append(projectsList, project)
 	}
 
@@ -1268,7 +1374,7 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, er
 	}
 
 	q := c.db.From(projects.Name()).Prepared(true)
-	q = q.Select("id", "name", "owner", "group_assignments")
+	q = q.Select("id", "name", "owner", "group_assignments", "created_at", "updated_at")
 	q = q.Where(goqu.C("id").Eq(projectID))
 
 	query, args, err := q.ToSQL()
@@ -1277,14 +1383,237 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, er
 	}
 
 	row := c.db.QueryRowContext(ctx, query, args...)
-	project := &Project{}
-	groupAssignments := ""
-	err = row.Scan(&project.Id, &project.Name, &project.Owner, &groupAssignments)
+	return c.rowToProject(ctx, row)
+}
+
+func (c *Client) ListGroupsByUpdatedAt(ctx context.Context, updatedAt time.Time, sToken *pagination.StreamToken) ([]*Group, string, error) {
+	err := c.validateDB()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	project.GroupAssignments = strings.Split(groupAssignments, ",")
+	limit := 50
+	offset := 0
+	if sToken != nil {
+		limit = sToken.Size
+		if sToken.Cursor != "" {
+			offset, err = strconv.Atoi(sToken.Cursor)
+			if err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	limit = min(max(limit, minEvents), maxEvents)
 
-	return project, nil
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
+
+	q := c.db.From(groups.Name()).Prepared(true).
+		Select("id", "name", "admins", "members", "created_at", "updated_at").
+		Where(goqu.C("updated_at").Gt(updatedAt)).
+		Order(goqu.C("updated_at").Desc()).
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	groupsList := []*Group{}
+	for rows.Next() {
+		group, err := c.rowToGroup(ctx, rows)
+		if err != nil {
+			return nil, "", err
+		}
+		groupsList = append(groupsList, group)
+	}
+
+	nextPageToken := ""
+	if len(groupsList) == limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+
+	return groupsList, nextPageToken, nil
+}
+
+func (c *Client) ListRolesByUpdatedAt(ctx context.Context, updatedAt time.Time, sToken *pagination.StreamToken) ([]*Role, string, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, "", err
+	}
+
+	limit := 50
+	offset := 0
+	if sToken != nil {
+		limit = sToken.Size
+		if sToken.Cursor != "" {
+			offset, err = strconv.Atoi(sToken.Cursor)
+			if err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	limit = min(max(limit, minEvents), maxEvents)
+
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
+
+	q := c.db.From(roles.Name()).Prepared(true).
+		Select("id", "name", "direct_assignments", "group_assignments", "created_at", "updated_at").
+		Where(goqu.C("updated_at").Gt(updatedAt)).
+		Order(goqu.C("updated_at").Desc()).
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	rolesList := []*Role{}
+	for rows.Next() {
+		role, err := c.rowToRole(ctx, rows)
+		if err != nil {
+			return nil, "", err
+		}
+		rolesList = append(rolesList, role)
+	}
+
+	nextPageToken := ""
+	if len(rolesList) == limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+
+	return rolesList, nextPageToken, nil
+}
+
+func (c *Client) ListProjectsByUpdatedAt(ctx context.Context, updatedAt time.Time, sToken *pagination.StreamToken) ([]*Project, string, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, "", err
+	}
+
+	limit := 50
+	offset := 0
+	if sToken != nil {
+		limit = sToken.Size
+		if sToken.Cursor != "" {
+			offset, err = strconv.Atoi(sToken.Cursor)
+			if err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	limit = min(max(limit, minEvents), maxEvents)
+
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
+
+	q := c.db.From(projects.Name()).Prepared(true).
+		Select("id", "name", "owner", "group_assignments", "created_at", "updated_at").
+		Where(goqu.C("updated_at").Gt(updatedAt)).
+		Order(goqu.C("updated_at").Desc()).
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	projectsList := []*Project{}
+	for rows.Next() {
+		project, err := c.rowToProject(ctx, rows)
+		if err != nil {
+			return nil, "", err
+		}
+		projectsList = append(projectsList, project)
+	}
+
+	nextPageToken := ""
+	if len(projectsList) == limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+
+	return projectsList, nextPageToken, nil
+}
+
+func (c *Client) ListScopedRolesByUpdatedAt(ctx context.Context, updatedAt time.Time, sToken *pagination.StreamToken) ([]*ScopedRole, string, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, "", err
+	}
+
+	limit := 50
+	offset := 0
+	if sToken != nil {
+		limit = sToken.Size
+		if sToken.Cursor != "" {
+			offset, err = strconv.Atoi(sToken.Cursor)
+			if err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	limit = min(max(limit, minEvents), maxEvents)
+
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
+
+	q := c.db.From(scopedRoles.Name()).Prepared(true).
+		Select("id", "project_id", "role_id", "user_assignments", "created_at", "updated_at").
+		Where(goqu.C("updated_at").Gt(updatedAt)).
+		Order(goqu.C("updated_at").Desc()).
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	scopedRolesList := []*ScopedRole{}
+	for rows.Next() {
+		scopedRole, err := c.rowToScopedRole(ctx, rows)
+		if err != nil {
+			return nil, "", err
+		}
+		scopedRolesList = append(scopedRolesList, scopedRole)
+	}
+
+	nextPageToken := ""
+	if len(scopedRolesList) == limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+
+	return scopedRolesList, nextPageToken, nil
 }

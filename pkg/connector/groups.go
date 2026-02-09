@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/conductorone/baton-demo/pkg/client"
 	config "github.com/conductorone/baton-sdk/pb/c1/config/v1"
@@ -38,6 +39,8 @@ func groupResource(g *client.Group, parentResourceID *v2.ResourceId) (*v2.Resour
 	profile := make(map[string]any)
 	profile["group_color"] = "green"
 	profile["group_size"] = len(g.Members) + len(g.Admins)
+	profile["created_at"] = g.CreatedAt.Format(time.RFC3339)
+	profile["updated_at"] = g.UpdatedAt.Format(time.RFC3339)
 
 	return resource.NewGroupResource(
 		g.Name,

@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/conductorone/baton-demo/pkg/config"
 )
@@ -58,10 +59,12 @@ func (g *generator) Next() (*dbResource, bool) {
 
 		db := &dbResource{
 			Group: &Group{
-				Id:      "group-everyone",
-				Name:    "Everyone",
-				Admins:  groupAdmins,
-				Members: groupMembers,
+				Id:        "group-everyone",
+				Name:      "Everyone",
+				Admins:    groupAdmins,
+				Members:   groupMembers,
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
 			},
 		}
 		g.currentGroup++
@@ -81,10 +84,12 @@ func (g *generator) Next() (*dbResource, bool) {
 		}
 		db := &dbResource{
 			Group: &Group{
-				Id:      fmt.Sprintf("group-%07d", g.currentGroup),
-				Name:    fmt.Sprintf("Group %07d", g.currentGroup),
-				Admins:  groupAdmins,
-				Members: groupMembers,
+				Id:        fmt.Sprintf("group-%07d", g.currentGroup),
+				Name:      fmt.Sprintf("Group %07d", g.currentGroup),
+				Admins:    groupAdmins,
+				Members:   groupMembers,
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
 			},
 		}
 		g.currentGroup++
@@ -100,6 +105,8 @@ func (g *generator) Next() (*dbResource, bool) {
 					fmt.Sprintf("group-%07d", g.currentProject%g.config.Groups),
 					fmt.Sprintf("group-%07d", (g.currentProject*10)%g.config.Groups),
 				},
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
 			},
 		}
 		g.currentProject++
@@ -122,6 +129,8 @@ func (g *generator) Next() (*dbResource, bool) {
 				Name:              fmt.Sprintf("Role %07d", g.currentRole),
 				DirectAssignments: directAssignments,
 				GroupAssignments:  groupAssignments,
+				CreatedAt:         time.Now(),
+				UpdatedAt:         time.Now(),
 			},
 		}
 		g.currentRole++
@@ -141,6 +150,8 @@ func (g *generator) Next() (*dbResource, bool) {
 					ProjectId:       fmt.Sprintf("project-%07d", g.currentScopedRole%g.config.Projects),
 					RoleId:          fmt.Sprintf("role-%07d", g.currentScopedRole%g.config.Roles),
 					UserAssignments: userAssignments,
+					CreatedAt:       time.Now(),
+					UpdatedAt:       time.Now(),
 				},
 			}
 		}
@@ -149,13 +160,15 @@ func (g *generator) Next() (*dbResource, bool) {
 	}
 	if g.currentUser < g.config.Users {
 		userFullName := fmt.Sprintf("User %07d", g.currentUser)
-		userEmail := fmt.Sprintf("user-%d@example.com", g.currentUser)
+		userEmail := fmt.Sprintf("user-%07d@example.com", g.currentUser)
 		db := &dbResource{
 			User: &User{
-				Id:      userId(g.currentUser),
-				Name:    userFullName,
-				Email:   userEmail,
-				Enabled: true, // Default to enabled
+				Id:        userId(g.currentUser),
+				Name:      userFullName,
+				Email:     userEmail,
+				Enabled:   true, // Default to enabled
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
 				Attrs: map[string]string{
 					"full_name": userFullName,
 					"email":     userEmail,
@@ -204,7 +217,15 @@ func (t *usersTable) Name() string {
 
 func (t *usersTable) Schema() ([]string, []any) {
 	return []string{
-		"CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT, enabled BOOLEAN DEFAULT 1, attrs BLOB)",
+		`CREATE TABLE IF NOT EXISTS users (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			email TEXT,
+			enabled BOOLEAN DEFAULT 1,
+			attrs BLOB,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}, []any{}
 }
 
@@ -218,7 +239,14 @@ func (t *groupsTable) Name() string {
 
 func (t *groupsTable) Schema() ([]string, []any) {
 	return []string{
-		"CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, admins TEXT NOT NULL, members TEXT NOT NULL)",
+		`CREATE TABLE IF NOT EXISTS groups (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			admins TEXT NOT NULL,
+			members TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}, []any{}
 }
 
@@ -232,7 +260,14 @@ func (t *rolesTable) Name() string {
 
 func (t *rolesTable) Schema() ([]string, []any) {
 	return []string{
-		"CREATE TABLE IF NOT EXISTS roles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, direct_assignments TEXT NOT NULL, group_assignments TEXT NOT NULL)",
+		`CREATE TABLE IF NOT EXISTS roles (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			direct_assignments TEXT NOT NULL,
+			group_assignments TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}, []any{}
 }
 
@@ -251,6 +286,8 @@ func (t *scopedRolesTable) Schema() ([]string, []any) {
 		project_id TEXT NOT NULL,
 		role_id TEXT NOT NULL,
 		user_assignments TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY(project_id) REFERENCES projects(id),
 		FOREIGN KEY(role_id) REFERENCES roles(id)
 	);`,
@@ -269,7 +306,14 @@ func (t *projectsTable) Name() string {
 
 func (t *projectsTable) Schema() ([]string, []any) {
 	return []string{
-		"CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, group_assignments TEXT NOT NULL)",
+		`CREATE TABLE IF NOT EXISTS projects (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			owner TEXT NOT NULL,
+			group_assignments TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}, []any{}
 }
 

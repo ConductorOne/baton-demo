@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -35,6 +36,8 @@ func roleResource(r *client.Role, parentResourceID *v2.ResourceId) (*v2.Resource
 			"total_assignments":  len(r.DirectAssignments) + len(r.GroupAssignments),
 			"direct_assignments": len(r.DirectAssignments),
 			"group_assignments":  len(r.GroupAssignments),
+			"created_at":         r.CreatedAt.Format(time.RFC3339),
+			"updated_at":         r.UpdatedAt.Format(time.RFC3339),
 		}),
 	}
 	return resource.NewRoleResource(r.Name, roleResourceType, r.Id, traits, resource.WithParentResourceID(parentResourceID))

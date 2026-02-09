@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -104,6 +105,8 @@ func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource
 	}
 	// Add the enabled status to the profile
 	attrs["enabled"] = u.Enabled
+	attrs["created_at"] = u.CreatedAt.Format(time.RFC3339)
+	attrs["updated_at"] = u.UpdatedAt.Format(time.RFC3339)
 
 	traits := []resource.UserTraitOption{
 		resource.WithEmail(u.Email, true),
@@ -112,6 +115,7 @@ func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource
 		resource.WithEmployeeID(u.Id),
 		resource.WithAccountType(v2.UserTrait_ACCOUNT_TYPE_HUMAN),
 		resource.WithUserProfile(attrs),
+		resource.WithCreatedAt(u.CreatedAt),
 	}
 	return resource.NewUserResource(
 		u.Name,
@@ -230,18 +234,23 @@ func (o *userBuilder) CreateAccount(
 ) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 
-	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetPlaintextPassword() == nil {
-		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no password provided")
+	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetPlaintextPassword() == nil && credentialOptions.GetNoPassword() == nil {
+		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-demo: invalid credential options provided")
 	}
 
-	l.Info("Generating password")
-	plainTextPassword, err := crypto.GeneratePassword(ctx, credentialOptions)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	ptd := &v2.PlaintextData{
-		Name:  "password",
-		Bytes: []byte(plainTextPassword),
+	var plainTextPassword string
+	var ptd *v2.PlaintextData
+	if credentialOptions.GetNoPassword() == nil {
+		l.Info("Generating password")
+		var err error
+		plainTextPassword, err = crypto.GeneratePassword(ctx, credentialOptions)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		ptd = &v2.PlaintextData{
+			Name:  "password",
+			Bytes: []byte(plainTextPassword),
+		}
 	}
 	l.Info("Creating user", zap.String("user_id", accountInfo.Login), zap.String("password", plainTextPassword))
 
@@ -258,9 +267,13 @@ func (o *userBuilder) CreateAccount(
 		return nil, nil, nil, err
 	}
 
+	ptdSlice := []*v2.PlaintextData{}
+	if ptd != nil {
+		ptdSlice = append(ptdSlice, ptd)
+	}
 	return &v2.CreateAccountResponse_SuccessResult{
 		Resource: resource,
-	}, []*v2.PlaintextData{ptd}, nil, nil
+	}, ptdSlice, nil, nil
 }
 
 func (o *userBuilder) Create(ctx context.Context, resource *v2.Resource) (*v2.Resource, annotations.Annotations, error) {
