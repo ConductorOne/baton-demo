@@ -36,6 +36,11 @@ import (
 // ScopedRoles are roles that are scoped to a project
 // Projects always have a single User as the owner, and can be assigned to Groups
 
+const (
+	minEvents = 50
+	maxEvents = 100
+)
+
 type User struct {
 	Id        string
 	Name      string
@@ -461,12 +466,7 @@ func (c *Client) ListUsersByUpdatedAt(ctx context.Context, updatedAt time.Time, 
 			}
 		}
 	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 100 {
-		limit = 100
-	}
+	limit = min(max(limit, minEvents), maxEvents)
 
 	if offset < 0 {
 		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
@@ -1404,12 +1404,8 @@ func (c *Client) ListGroupsByUpdatedAt(ctx context.Context, updatedAt time.Time,
 			}
 		}
 	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 100 {
-		limit = 100
-	}
+	limit = min(max(limit, minEvents), maxEvents)
+
 	if offset < 0 {
 		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
 	}
@@ -1466,12 +1462,8 @@ func (c *Client) ListRolesByUpdatedAt(ctx context.Context, updatedAt time.Time, 
 			}
 		}
 	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 100 {
-		limit = 100
-	}
+	limit = min(max(limit, minEvents), maxEvents)
+
 	if offset < 0 {
 		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
 	}
@@ -1528,12 +1520,8 @@ func (c *Client) ListProjectsByUpdatedAt(ctx context.Context, updatedAt time.Tim
 			}
 		}
 	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 100 {
-		limit = 100
-	}
+	limit = min(max(limit, minEvents), maxEvents)
+
 	if offset < 0 {
 		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
 	}
@@ -1590,12 +1578,8 @@ func (c *Client) ListScopedRolesByUpdatedAt(ctx context.Context, updatedAt time.
 			}
 		}
 	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 100 {
-		limit = 100
-	}
+	limit = min(max(limit, minEvents), maxEvents)
+
 	if offset < 0 {
 		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
 	}
