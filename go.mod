@@ -3,7 +3,7 @@ module github.com/conductorone/baton-demo
 go 1.25.2
 
 require (
-	github.com/conductorone/baton-sdk v0.7.12
+	github.com/conductorone/baton-sdk v0.7.18
 	github.com/doug-martin/goqu/v9 v9.19.0
 	github.com/ennyjfrick/ruleguard-logfatal v0.0.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
