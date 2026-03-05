@@ -34,6 +34,13 @@ var scopedRoleResourceType = &v2.ResourceType{
 	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SCOPE_BINDING},
 }
 
+// The app resource type is for all app objects from the database.
+var appResourceType = &v2.ResourceType{
+	Id:          "app",
+	DisplayName: "App",
+	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+}
+
 // The project resource type is for all project objects from the database
 // Projects don't match any of the well-known resource traits.
 var projectResourceType = &v2.ResourceType{

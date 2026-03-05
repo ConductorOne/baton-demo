@@ -93,6 +93,15 @@ type Password struct {
 	UserId   string
 }
 
+type App struct {
+	Id          string
+	Name        string
+	Members     []string
+	ChildGroups []string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 // Client is a simple example client. While this client would normally be responsible for communicating with an upstream.
 // API, for this demo the client is only working with in-memory data.
 type Client struct {
@@ -353,6 +362,26 @@ func (c *Client) initDB(ctx context.Context) error {
 			basePasswordQ = basePasswordQ.Rows(row)
 			basePasswordQ = basePasswordQ.OnConflict(goqu.DoUpdate("id", row))
 			query, args, err := basePasswordQ.ToSQL()
+			if err != nil {
+				return err
+			}
+			_, err = c.db.Exec(query, args...)
+			if err != nil {
+				return err
+			}
+		case dbResource.App != nil:
+			row := goqu.Record{
+				"id":           dbResource.App.Id,
+				"name":         dbResource.App.Name,
+				"members":      strings.Join(dbResource.App.Members, ","),
+				"child_groups": strings.Join(dbResource.App.ChildGroups, ","),
+				"created_at":   dbResource.App.CreatedAt,
+				"updated_at":   dbResource.App.UpdatedAt,
+			}
+			baseAppQ := c.db.Insert(apps.Name()).Prepared(true)
+			baseAppQ = baseAppQ.Rows(row)
+			baseAppQ = baseAppQ.OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := baseAppQ.ToSQL()
 			if err != nil {
 				return err
 			}
@@ -1616,4 +1645,222 @@ func (c *Client) ListScopedRolesByUpdatedAt(ctx context.Context, updatedAt time.
 	}
 
 	return scopedRolesList, nextPageToken, nil
+}
+
+func (c *Client) rowToApp(_ context.Context, row scannable) (*App, error) {
+	app := &App{}
+	members := ""
+	childGroups := ""
+	err := row.Scan(&app.Id, &app.Name, &members, &childGroups, &app.CreatedAt, &app.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	if members != "" {
+		app.Members = strings.Split(members, ",")
+	}
+	if childGroups != "" {
+		app.ChildGroups = strings.Split(childGroups, ",")
+	}
+	return app, nil
+}
+
+// ListApps returns all the apps from the database.
+func (c *Client) ListApps(ctx context.Context) ([]*App, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, err
+	}
+
+	q := c.db.From(apps.Name()).Prepared(true)
+	q = q.Select("id", "name", "members", "child_groups", "created_at", "updated_at")
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	appsList := []*App{}
+	for rows.Next() {
+		app, err := c.rowToApp(ctx, rows)
+		if err != nil {
+			return nil, err
+		}
+		appsList = append(appsList, app)
+	}
+
+	return appsList, nil
+}
+
+// GetApp returns the app requested if it exists, else returns an error.
+func (c *Client) GetApp(ctx context.Context, appID string) (*App, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, err
+	}
+
+	q := c.db.From(apps.Name()).Prepared(true)
+	q = q.Select("id", "name", "members", "child_groups", "created_at", "updated_at")
+	q = q.Where(goqu.C("id").Eq(appID))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, err
+	}
+
+	row := c.db.QueryRowContext(ctx, query, args...)
+	return c.rowToApp(ctx, row)
+}
+
+func (c *Client) ListAppsByUpdatedAt(ctx context.Context, updatedAt time.Time, sToken *pagination.StreamToken) ([]*App, string, error) {
+	err := c.validateDB()
+	if err != nil {
+		return nil, "", err
+	}
+
+	limit := 50
+	offset := 0
+	if sToken != nil {
+		limit = sToken.Size
+		if sToken.Cursor != "" {
+			offset, err = strconv.Atoi(sToken.Cursor)
+			if err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	limit = min(max(limit, minEvents), maxEvents)
+
+	if offset < 0 {
+		return nil, "", status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
+
+	q := c.db.From(apps.Name()).Prepared(true).
+		Select("id", "name", "members", "child_groups", "created_at", "updated_at").
+		Where(goqu.C("updated_at").Gt(updatedAt)).
+		Order(goqu.C("updated_at").Desc()).
+		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Offset(uint(offset))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	appsList := []*App{}
+	for rows.Next() {
+		app, err := c.rowToApp(ctx, rows)
+		if err != nil {
+			return nil, "", err
+		}
+		appsList = append(appsList, app)
+	}
+
+	nextPageToken := ""
+	if len(appsList) == limit {
+		nextPageToken = strconv.Itoa(offset + limit)
+	}
+
+	return appsList, nextPageToken, nil
+}
+
+func (c *Client) GrantAppAccess(ctx context.Context, appID, userID string) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	app, err := c.GetApp(ctx, appID)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.GetUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	if slices.Contains(app.Members, userID) {
+		return nil
+	}
+
+	app.Members = append(app.Members, userID)
+	q := c.db.Update(apps.Name()).Prepared(true)
+	q = q.Set(goqu.Record{
+		"members":    strings.Join(app.Members, ","),
+		"updated_at": time.Now(),
+	})
+	q = q.Where(goqu.C("id").Eq(appID))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) RevokeAppAccess(ctx context.Context, appID, userID string) error {
+	err := c.validateDB()
+	if err != nil {
+		return err
+	}
+
+	app, err := c.GetApp(ctx, appID)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.GetUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i, u := range app.Members {
+		if u == userID {
+			app.Members = append(app.Members[:i], app.Members[i+1:]...)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+
+	q := c.db.Update(apps.Name()).Prepared(true)
+	q = q.Set(goqu.Record{
+		"members":    strings.Join(app.Members, ","),
+		"updated_at": time.Now(),
+	})
+	q = q.Where(goqu.C("id").Eq(appID))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return err
+	}
+
+	_, err = c.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

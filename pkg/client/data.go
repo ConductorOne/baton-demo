@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/conductorone/baton-demo/pkg/config"
@@ -14,6 +15,7 @@ type dbResource struct {
 	ScopedRole *ScopedRole
 	Project    *Project
 	Password   *Password
+	App        *App
 }
 
 func (r *dbResource) String() string {
@@ -30,6 +32,8 @@ func (r *dbResource) String() string {
 		return fmt.Sprintf("Project: id %s name '%s' owner %s %d groups", r.Project.Id, r.Project.Name, r.Project.Owner, len(r.Project.GroupAssignments))
 	case r.Password != nil:
 		return fmt.Sprintf("Password: id %s userid %s", r.Password.Id, r.Password.UserId)
+	case r.App != nil:
+		return fmt.Sprintf("App: id %s name '%s' %d members %d child_groups", r.App.Id, r.App.Name, len(r.App.Members), len(r.App.ChildGroups))
 	}
 	return "Unknown"
 }
@@ -460,6 +464,66 @@ var appGroups = []appDef{
 	}, RegionOnly: "APAC", NoisePct: 2},
 }
 
+// --- App-to-group mapping ---
+
+type appMapping struct {
+	ParentIdx    int
+	ChildIndices []int
+}
+
+// buildAppMappings walks appGroups and identifies which entries are top-level
+// apps vs child groups. A child group has a name like "ParentApp - ChildName"
+// where ParentApp matches a preceding entry that has no " - " in its name.
+func buildAppMappings() []appMapping {
+	// First, collect all top-level (parent) names and their indices
+	type parentInfo struct {
+		idx  int
+		name string
+	}
+	var parents []parentInfo
+	isChild := make(map[int]bool)
+
+	for i, ag := range appGroups {
+		if !strings.Contains(ag.Name, " - ") {
+			parents = append(parents, parentInfo{idx: i, name: ag.Name})
+		}
+	}
+
+	// For each entry with " - ", check if its prefix matches a known parent
+	for i, ag := range appGroups {
+		if idx := strings.Index(ag.Name, " - "); idx > 0 {
+			prefix := ag.Name[:idx]
+			for _, p := range parents {
+				if p.name == prefix {
+					isChild[i] = true
+					break
+				}
+			}
+		}
+	}
+
+	// Build mappings
+	var mappings []appMapping
+	for _, p := range parents {
+		m := appMapping{ParentIdx: p.idx}
+		for i, ag := range appGroups {
+			if isChild[i] {
+				prefix := ag.Name[:strings.Index(ag.Name, " - ")]
+				if prefix == p.name {
+					m.ChildIndices = append(m.ChildIndices, i)
+				}
+			}
+		}
+		mappings = append(mappings, m)
+	}
+
+	return mappings
+}
+
+func appId(i int) string {
+	return fmt.Sprintf("app-%07d", i)
+}
+
 // --- Multinational names ---
 
 var firstNames = []string{
@@ -801,7 +865,10 @@ type generator struct {
 	currentRole       int
 	currentScopedRole int
 	currentProject    int
+	currentApp        int
 	groupsDone        bool
+	appsDone          bool
+	appMappings       []appMapping
 }
 
 func (g *generator) ensurePositions() {
@@ -809,93 +876,123 @@ func (g *generator) ensurePositions() {
 		return
 	}
 	g.positions = buildOrgChart(g.config.Users)
+	g.appMappings = buildAppMappings()
 }
 
 func (g *generator) totalAppGroups() int {
 	return len(appGroups)
 }
 
+// validGroupIndices returns the appGroups indices that are actual groups (not top-level apps).
+func (g *generator) validGroupIndices() []int {
+	var indices []int
+	for i := range appGroups {
+		if !g.isTopLevelApp(i) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+// isTopLevelApp returns true if the given appGroups index is a parent app entry.
+func (g *generator) isTopLevelApp(groupIdx int) bool {
+	for _, m := range g.appMappings {
+		if m.ParentIdx == groupIdx {
+			return true
+		}
+	}
+	return false
+}
+
+// computeGroupMembers computes the members and admins for a given appGroups index.
+func (g *generator) computeGroupMembers(groupIdx int) (members []string, admins []string) {
+	app := appGroups[groupIdx]
+
+	for i := 0; i < g.config.Users; i++ {
+		pos := g.positions[i]
+
+		if pos.EmploymentType == "Service Account" || pos.EmploymentType == "Shared Account" {
+			if !g.isUniversalApp(groupIdx) {
+				coverage, inDept := app.DeptCoverage[pos.Department]
+				if !inDept || !shouldAssign(i, groupIdx, coverage) {
+					continue
+				}
+			}
+		}
+
+		dept := pos.Department
+		coverage, inTargetDept := app.DeptCoverage[dept]
+
+		assign := false
+		if inTargetDept {
+			assign = shouldAssign(i, groupIdx, coverage)
+		} else if app.NoisePct > 0 {
+			assign = shouldAssign(i, groupIdx+1000, app.NoisePct)
+		}
+
+		// Level gate
+		if app.MinLevel != "" && assign {
+			userLvl := levelOrder[pos.Level]
+			minLvl := levelOrder[app.MinLevel]
+			if userLvl < minLvl {
+				if app.MinLevel == "Manager" && isActingManager(i, g.config.Users, pos.Level) {
+					// allowed
+				} else {
+					assign = false
+				}
+			}
+		}
+
+		// Region gate
+		if app.RegionOnly != "" && assign {
+			if pos.Region != app.RegionOnly {
+				assign = false
+			}
+		}
+
+		// Edge: transferred users retain old department access
+		if !assign && isTransferred(i, g.config.Users, pos.Department) {
+			oldDept := getTransferredFromDept(i, pos.Department)
+			if oldCov, ok := app.DeptCoverage[oldDept]; ok {
+				assign = shouldAssign(i, groupIdx, oldCov)
+			}
+		}
+
+		// Edge: over-privileged ICs gain random extra access
+		if !assign && isOverPrivileged(i, g.config.Users, pos.Level) {
+			assign = shouldAssign(i, groupIdx+3000, 30)
+		}
+
+		if assign {
+			members = append(members, userId(i))
+
+			isAdmin := shouldAssign(i, groupIdx, 2)
+			if isOverPrivileged(i, g.config.Users, pos.Level) {
+				isAdmin = shouldAssign(i, groupIdx, 25)
+			}
+			if inTargetDept && levelOrder[pos.Level] >= levelOrder["VP"] {
+				isAdmin = true
+			}
+			if isAdmin {
+				admins = append(admins, userId(i))
+			}
+		}
+	}
+
+	return members, admins
+}
+
 func (g *generator) Next() (*dbResource, bool) {
 	g.ensurePositions()
 
-	// Phase 1: App-based groups
+	// Phase 1: App-based groups (skip top-level app entries; they become app resources)
 	if !g.groupsDone {
+		for g.currentGroup < g.totalAppGroups() && g.isTopLevelApp(g.currentGroup) {
+			g.currentGroup++
+		}
 		if g.currentGroup < g.totalAppGroups() {
 			app := appGroups[g.currentGroup]
-			var members []string
-			var admins []string
-
-			for i := 0; i < g.config.Users; i++ {
-				pos := g.positions[i]
-
-				if pos.EmploymentType == "Service Account" || pos.EmploymentType == "Shared Account" {
-					if !g.isUniversalApp(g.currentGroup) {
-						coverage, inDept := app.DeptCoverage[pos.Department]
-						if !inDept || !shouldAssign(i, g.currentGroup, coverage) {
-							continue
-						}
-					}
-				}
-
-				dept := pos.Department
-				coverage, inTargetDept := app.DeptCoverage[dept]
-
-				assign := false
-				if inTargetDept {
-					assign = shouldAssign(i, g.currentGroup, coverage)
-				} else if app.NoisePct > 0 {
-					assign = shouldAssign(i, g.currentGroup+1000, app.NoisePct)
-				}
-
-				// Level gate
-				if app.MinLevel != "" && assign {
-					userLvl := levelOrder[pos.Level]
-					minLvl := levelOrder[app.MinLevel]
-					if userLvl < minLvl {
-						// Acting managers bypass the manager-level gate
-						if app.MinLevel == "Manager" && isActingManager(i, g.config.Users, pos.Level) {
-							// allowed
-						} else {
-							assign = false
-						}
-					}
-				}
-
-				// Region gate
-				if app.RegionOnly != "" && assign {
-					if pos.Region != app.RegionOnly {
-						assign = false
-					}
-				}
-
-				// Edge: transferred users retain old department access
-				if !assign && isTransferred(i, g.config.Users, pos.Department) {
-					oldDept := getTransferredFromDept(i, pos.Department)
-					if oldCov, ok := app.DeptCoverage[oldDept]; ok {
-						assign = shouldAssign(i, g.currentGroup, oldCov)
-					}
-				}
-
-				// Edge: over-privileged ICs gain random extra access
-				if !assign && isOverPrivileged(i, g.config.Users, pos.Level) {
-					assign = shouldAssign(i, g.currentGroup+3000, 30)
-				}
-
-				if assign {
-					members = append(members, userId(i))
-
-					isAdmin := shouldAssign(i, g.currentGroup, 2)
-					if isOverPrivileged(i, g.config.Users, pos.Level) {
-						isAdmin = shouldAssign(i, g.currentGroup, 25)
-					}
-					if inTargetDept && levelOrder[pos.Level] >= levelOrder["VP"] {
-						isAdmin = true
-					}
-					if isAdmin {
-						admins = append(admins, userId(i))
-					}
-				}
-			}
+			members, admins := g.computeGroupMembers(g.currentGroup)
 
 			db := &dbResource{
 				Group: &Group{
@@ -930,20 +1027,56 @@ func (g *generator) Next() (*dbResource, bool) {
 		return db, true
 	}
 
+	// Phase 1.5: App resources
+	if !g.appsDone {
+		if g.currentApp < len(g.appMappings) {
+			m := g.appMappings[g.currentApp]
+			app := appGroups[m.ParentIdx]
+
+			// App members = what would have been the top-level group's members
+			members, _ := g.computeGroupMembers(m.ParentIdx)
+
+			// child_groups = group IDs of the child entries
+			var childGroups []string
+			for _, childIdx := range m.ChildIndices {
+				childGroups = append(childGroups, groupId(childIdx))
+			}
+
+			db := &dbResource{
+				App: &App{
+					Id:          appId(g.currentApp),
+					Name:        app.Name,
+					Members:     members,
+					ChildGroups: childGroups,
+					CreatedAt:   time.Now(),
+					UpdatedAt:   time.Now(),
+				},
+			}
+			g.currentApp++
+			return db, true
+		}
+		g.appsDone = true
+	}
+
 	// Phase 2: Projects
 	if g.currentProject < g.config.Projects {
-		totalGroups := g.totalAppGroups()
+		validGroups := g.validGroupIndices()
+		totalValid := len(validGroups)
+		var groupAssignments []string
+		if totalValid > 0 {
+			groupAssignments = []string{
+				groupId(validGroups[g.currentProject%totalValid]),
+				groupId(validGroups[(g.currentProject*10)%totalValid]),
+			}
+		}
 		db := &dbResource{
 			Project: &Project{
-				Id:    fmt.Sprintf("project-%07d", g.currentProject),
-				Name:  fmt.Sprintf("Project %07d", g.currentProject),
-				Owner: userId(g.currentProject % g.config.Users),
-				GroupAssignments: []string{
-					groupId(g.currentProject % totalGroups),
-					groupId((g.currentProject * 10) % totalGroups),
-				},
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
+				Id:               fmt.Sprintf("project-%07d", g.currentProject),
+				Name:             fmt.Sprintf("Project %07d", g.currentProject),
+				Owner:            userId(g.currentProject % g.config.Users),
+				GroupAssignments: groupAssignments,
+				CreatedAt:        time.Now(),
+				UpdatedAt:        time.Now(),
 			},
 		}
 		g.currentProject++
@@ -952,16 +1085,17 @@ func (g *generator) Next() (*dbResource, bool) {
 
 	// Phase 3: Roles
 	if g.currentRole < g.config.Roles {
-		totalGroups := g.totalAppGroups()
+		validGroups := g.validGroupIndices()
+		totalValid := len(validGroups)
 		var directAssignments []string
 		if g.config.Users > 0 {
 			directAssignments = append(directAssignments, userId(g.currentRole%g.config.Users))
 			directAssignments = append(directAssignments, userId((g.currentRole*10)%g.config.Users))
 		}
 		var groupAssignments []string
-		if totalGroups > 5 {
-			groupAssignments = append(groupAssignments, groupId(g.currentRole%totalGroups))
-			groupAssignments = append(groupAssignments, groupId((g.currentRole*10)%totalGroups))
+		if totalValid > 5 {
+			groupAssignments = append(groupAssignments, groupId(validGroups[g.currentRole%totalValid]))
+			groupAssignments = append(groupAssignments, groupId(validGroups[(g.currentRole*10)%totalValid]))
 		}
 		db := &dbResource{
 			Role: &Role{
@@ -1097,6 +1231,7 @@ var allTableDescriptors = []tableDescriptor{
 	scopedRoles,
 	projects,
 	passwords,
+	apps,
 }
 
 type tableDescriptor interface {
@@ -1225,5 +1360,26 @@ func (t *passwordsTable) Name() string {
 func (t *passwordsTable) Schema() ([]string, []any) {
 	return []string{
 		"CREATE TABLE IF NOT EXISTS passwords (id TEXT PRIMARY KEY, password TEXT NOT NULL, user_id TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id))",
+	}, []any{}
+}
+
+var apps = (*appsTable)(nil)
+
+type appsTable struct{}
+
+func (t *appsTable) Name() string {
+	return "apps"
+}
+
+func (t *appsTable) Schema() ([]string, []any) {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS apps (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			members TEXT NOT NULL,
+			child_groups TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}, []any{}
 }
