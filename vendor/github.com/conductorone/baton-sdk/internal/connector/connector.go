@@ -254,25 +254,15 @@ func (cw *wrapper) runServer(ctx context.Context, serverCred *tlsV1.Credential) 
 	}
 	var sessionListenerPort uint32
 	if cw.sessionStoreEnabled {
-		var sessionListenerFile *os.File
-		sessionListenerPort, sessionListenerFile, err = cw.setupListener(ctx)
+		var sessionListener net.Listener
+		sessionListenerPort, sessionListener, err = cw.setupSessionListener(ctx)
 		if err != nil {
 			return 0, fmt.Errorf("failed to setup session listener: %w", err)
 		}
 
-		if sessionListenerFile == nil {
-			return 0, fmt.Errorf("session listener file is nil")
-		}
-
-		// Start the session cache server on the cache listener
-		sessionListener, err := net.FileListener(sessionListenerFile)
-		if err != nil {
-			_ = sessionListenerFile.Close()
-			return 0, fmt.Errorf("failed to create session listener: %w", err)
-		}
 		tlsConfig, err := utls2.ListenerConfig(ctx, serverCred)
 		if err != nil {
-			_ = sessionListenerFile.Close()
+			_ = sessionListener.Close()
 			return 0, fmt.Errorf("failed to create session listener config: %w", err)
 		}
 
@@ -281,7 +271,7 @@ func (cw *wrapper) runServer(ctx context.Context, serverCred *tlsV1.Credential) 
 		server := session.NewGRPCSessionServer()
 		cw.SessionServer = server
 		go func() {
-			defer sessionListenerFile.Close()
+			defer sessionListener.Close()
 			serverErr := session.StartGRPCSessionServerWithOptions(ctx, sessionListener, server,
 				grpc.Creds(credentials.NewTLS(tlsConfig)),
 				grpc.ChainUnaryInterceptor(ugrpc.UnaryServerInterceptor(ctx)...),
@@ -314,6 +304,7 @@ func (cw *wrapper) runServer(ctx context.Context, serverCred *tlsV1.Credential) 
 		return 0, err
 	}
 
+	//nolint:gosec // arg0 is the current executable path; args are passed directly without a shell.
 	cmd := exec.CommandContext(ctx, arg0, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -341,10 +332,24 @@ func (cw *wrapper) runServer(ctx context.Context, serverCred *tlsV1.Credential) 
 	go func() {
 		waitErr := cmd.Wait()
 		if waitErr != nil {
+			// When the parent context is cancelled during normal shutdown,
+			// exec.CommandContext terminates the child process. Treat that
+			// exit as expected instead of logging it as an unexpected error.
+			errIsExpected := ctx.Err() != nil
+			if errIsExpected {
+				l.Debug("connector service quit expectedly", zap.Error(waitErr))
+				closeErr := cw.Close()
+				if closeErr != nil {
+					l.Error("error closing connector wrapper", zap.Error(closeErr))
+				}
+				os.Exit(0)
+				return
+			}
+
 			l.Error("connector service quit unexpectedly", zap.Error(waitErr))
-			waitErr = cw.Close()
-			if waitErr != nil {
-				l.Error("error closing connector wrapper", zap.Error(waitErr))
+			closeErr := cw.Close()
+			if closeErr != nil {
+				l.Error("error closing connector wrapper", zap.Error(closeErr))
 			}
 			os.Exit(1)
 		}
