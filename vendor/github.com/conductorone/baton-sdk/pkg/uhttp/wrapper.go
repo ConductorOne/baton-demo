@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/metrics"
 	"github.com/conductorone/baton-sdk/pkg/ratelimit"
 )
 
@@ -33,6 +35,11 @@ const (
 	applicationVndApiJSON     = "application/vnd.api+json"
 	acceptHeader              = "Accept"
 	authorizationHeader       = "Authorization"
+
+	httpCacheHitCounterName  = "baton_sdk.http_cache_hit"
+	httpCacheMissCounterName = "baton_sdk.http_cache_miss"
+	httpCacheHitCounterDesc  = "number of HTTP cache hits"
+	httpCacheMissCounterDesc = "number of HTTP cache misses"
 )
 
 type WrapperResponse struct {
@@ -63,25 +70,44 @@ func WithRateLimiter(rate int, per time.Duration) WrapperOption {
 	return rateLimiterOption{rate: rate, per: per}
 }
 
+type metricsHandlerOption struct {
+	handler metrics.Handler
+}
+
+func (o metricsHandlerOption) Apply(c *BaseHttpClient) {
+	c.metricsHandler = o.handler
+}
+
+// WithMetricsHandler returns a WrapperOption that sets the metrics handler for the http client.
+// When set, cache hits and misses will be recorded as metrics.
+func WithMetricsHandler(handler metrics.Handler) WrapperOption {
+	return metricsHandlerOption{handler: handler}
+}
+
 type WrapperOption interface {
 	Apply(*BaseHttpClient)
 }
 
 // Keep a handle on all caches so we can clear them later.
-var caches []icache
+var (
+	caches    []icache
+	cachesMtx sync.RWMutex
+)
 
 func ClearCaches(ctx context.Context) error {
 	l := ctxzap.Extract(ctx)
 	l.Debug("clearing caches")
-	var err error
+	var errs []error
+	cachesMtx.RLock()
+	defer cachesMtx.RUnlock()
 	for _, cache := range caches {
 		l.Debug("clearing cache", zap.String("cache", fmt.Sprintf("%T", cache)), zap.Any("stats", cache.Stats(ctx)))
-		err = cache.Clear(ctx)
+		err := cache.Clear(ctx)
 		if err != nil {
-			err = errors.Join(err, err)
+			errs = append(errs, err)
 		}
 	}
-	return err
+	return errors.Join(errs...)
 }
 
 type (
@@ -91,9 +117,10 @@ type (
 		NewRequest(ctx context.Context, method string, url *url.URL, options ...RequestOption) (*http.Request, error)
 	}
 	BaseHttpClient struct {
-		HttpClient    *http.Client
-		rateLimiter   uRateLimit.Limiter
-		baseHttpCache icache
+		HttpClient     *http.Client
+		rateLimiter    uRateLimit.Limiter
+		baseHttpCache  icache
+		metricsHandler metrics.Handler
 	}
 
 	DoOption      func(resp *WrapperResponse) error
@@ -122,7 +149,9 @@ func NewBaseHttpClientWithContext(ctx context.Context, httpClient *http.Client, 
 		baseHttpCache: cache,
 	}
 
+	cachesMtx.Lock()
 	caches = append(caches, cache)
+	cachesMtx.Unlock()
 
 	for _, opt := range opts {
 		opt.Apply(cli)
@@ -206,6 +235,36 @@ type ErrorResponse interface {
 	Message() string
 }
 
+// GrpcCodeFromHTTPStatus maps an HTTP status code to the appropriate gRPC status code.
+func GrpcCodeFromHTTPStatus(httpStatus int) codes.Code {
+	switch httpStatus {
+	case http.StatusBadRequest:
+		return codes.InvalidArgument
+	case http.StatusRequestTimeout:
+		return codes.DeadlineExceeded
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return codes.Unavailable
+	case http.StatusNotFound:
+		return codes.NotFound
+	case http.StatusUnauthorized:
+		return codes.Unauthenticated
+	case http.StatusForbidden:
+		return codes.PermissionDenied
+	case http.StatusConflict:
+		return codes.AlreadyExists
+	case http.StatusNotImplemented:
+		return codes.Unimplemented
+	}
+	switch {
+	case httpStatus >= 500 && httpStatus <= 599:
+		return codes.Unavailable
+	case httpStatus >= 400 && httpStatus <= 499:
+		return codes.InvalidArgument
+	default:
+		return codes.Unknown
+	}
+}
+
 func WithErrorResponse(resource ErrorResponse) DoOption {
 	return func(resp *WrapperResponse) error {
 		if resp.StatusCode < 300 {
@@ -214,21 +273,27 @@ func WithErrorResponse(resource ErrorResponse) DoOption {
 
 		contentHeader := resp.Header.Get(ContentType)
 
+		grpcCode := GrpcCodeFromHTTPStatus(resp.StatusCode)
+
 		if !IsJSONContentType(contentHeader) {
 			// to print the response, set the envvar BATON_DEBUG_PRINT_RESPONSE_BODY as non-empty, instead
-			return fmt.Errorf("unexpected content type for JSON error response: %s. status code: %d. body: %s", contentHeader, resp.StatusCode, string(resp.Body))
+			return status.Errorf(grpcCode,
+				"unexpected content type for JSON error response: %s. status code: %d. body: %s",
+				contentHeader, resp.StatusCode, string(resp.Body))
 		}
 
 		// Decode the JSON response body into the ErrorResponse
 		if err := json.Unmarshal(resp.Body, &resource); err != nil {
 			// to print the response, set the envvar BATON_DEBUG_PRINT_RESPONSE_BODY as non-empty, instead
-			return fmt.Errorf("failed to unmarshal JSON error response: %w. status code: %d. body: %s", err, resp.StatusCode, string(resp.Body))
+			return status.Errorf(grpcCode,
+				"failed to unmarshal JSON error response: %v. status code: %d. body: %s",
+				err, resp.StatusCode, string(resp.Body))
 		}
 
 		// Construct a more detailed error message
 		errMsg := fmt.Sprintf("Request failed with status %d: %s", resp.StatusCode, resource.Message())
 
-		return status.Error(codes.Unknown, errMsg)
+		return status.Error(grpcCode, errMsg)
 	}
 }
 
@@ -266,6 +331,8 @@ func WithResponse(response any) DoOption {
 
 // Handle anything that can be marshaled into JSON or XML.
 // If the response is a list, its values will be put into the "items" field.
+// If the response is a single value (int, string, bool, etc), it will be put into the "value" field.
+// A response of `null` results in the "value" field being set to `nil`.
 func WithGenericResponse(response *map[string]any) DoOption {
 	return func(resp *WrapperResponse) error {
 		if response == nil {
@@ -273,6 +340,10 @@ func WithGenericResponse(response *map[string]any) DoOption {
 		}
 
 		if resp.StatusCode == http.StatusNoContent {
+			return nil
+		}
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 && len(resp.Body) == 0 {
 			return nil
 		}
 
@@ -288,23 +359,31 @@ func WithGenericResponse(response *map[string]any) DoOption {
 				(*response)["items"] = list
 			} else if vMap, ok := v.(map[string]any); ok {
 				*response = vMap
+			} else if boolValue, ok := v.(bool); ok {
+				(*response) = map[string]any{"value": boolValue}
+			} else if floatValue, ok := v.(float64); ok {
+				(*response) = map[string]any{"value": floatValue}
+			} else if stringValue, ok := v.(string); ok {
+				(*response) = map[string]any{"value": stringValue}
+			} else if v == nil {
+				// JSON response is literally `null`.
+				(*response) = map[string]any{"value": nil}
 			} else {
-				return status.Errorf(codes.Internal, "unsupported content type: %T", v)
+				return status.Errorf(codes.Internal, "unsupported value type: %T", v)
 			}
 			return nil
 		}
 
 		if IsXMLContentType(resp.Header.Get(ContentType)) {
-			err = WithXMLResponse(response)(resp)
+			var xm xmlMap
+			err = WithXMLResponse(&xm)(resp)
 			if err != nil {
 				return err
 			}
-			if list, ok := v.([]any); ok {
-				(*response)["items"] = list
-			} else if vMap, ok := v.(map[string]any); ok {
+			if vMap, ok := xm.data.(map[string]any); ok {
 				*response = vMap
 			} else {
-				return status.Errorf(codes.Internal, "unsupported content type: %T", v)
+				return status.Errorf(codes.Internal, "unsupported XML structure: %T", xm.data)
 			}
 			return nil
 		}
@@ -341,6 +420,22 @@ func WrapErrorsWithRateLimitInfo(preferredCode codes.Code, resp *http.Response, 
 	return errors.Join(allErrs...)
 }
 
+func (c *BaseHttpClient) recordCacheHit(ctx context.Context) {
+	if c.metricsHandler == nil {
+		return
+	}
+	counter := c.metricsHandler.Int64Counter(httpCacheHitCounterName, httpCacheHitCounterDesc, metrics.Dimensionless)
+	counter.Add(ctx, 1, nil)
+}
+
+func (c *BaseHttpClient) recordCacheMiss(ctx context.Context) {
+	if c.metricsHandler == nil {
+		return
+	}
+	counter := c.metricsHandler.Int64Counter(httpCacheMissCounterName, httpCacheMissCounterDesc, metrics.Dimensionless)
+	counter.Add(ctx, 1, nil)
+}
+
 func (c *BaseHttpClient) Do(req *http.Request, options ...DoOption) (*http.Response, error) {
 	var (
 		err  error
@@ -359,13 +454,14 @@ func (c *BaseHttpClient) Do(req *http.Request, options ...DoOption) (*http.Respo
 			return nil, err
 		}
 		if resp == nil {
-			l.Debug("http cache miss", zap.String("url", req.URL.String()))
+			c.recordCacheMiss(req.Context())
 		} else {
-			l.Debug("http cache hit", zap.String("url", req.URL.String()))
+			c.recordCacheHit(req.Context())
 		}
 	}
 
 	if resp == nil {
+		//nolint:gosec // this HTTP wrapper intentionally supports arbitrary connector-defined endpoints.
 		resp, err = c.HttpClient.Do(req)
 		if err != nil {
 			l.Error("base-http-client: HTTP error response", zap.Error(err))
@@ -434,36 +530,21 @@ func (c *BaseHttpClient) Do(req *http.Request, options ...DoOption) (*http.Respo
 	// Log response headers directly for certain errors
 	if resp.StatusCode >= 400 {
 		redactedHeaders := RedactSensitiveHeaders(resp.Header)
-		l.Error("base-http-client: HTTP error status",
+		logFields := []zap.Field{
 			zap.Int("status_code", resp.StatusCode),
 			zap.String("status", resp.Status),
 			zap.Any("headers", redactedHeaders),
-		)
-	}
-
-	switch resp.StatusCode {
-	case http.StatusRequestTimeout:
-		return resp, WrapErrorsWithRateLimitInfo(codes.DeadlineExceeded, resp, optErrs...)
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unavailable, resp, optErrs...)
-	case http.StatusNotFound:
-		return resp, WrapErrorsWithRateLimitInfo(codes.NotFound, resp, optErrs...)
-	case http.StatusUnauthorized:
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unauthenticated, resp, optErrs...)
-	case http.StatusForbidden:
-		return resp, WrapErrorsWithRateLimitInfo(codes.PermissionDenied, resp, optErrs...)
-	case http.StatusConflict:
-		return resp, WrapErrorsWithRateLimitInfo(codes.AlreadyExists, resp, optErrs...)
-	case http.StatusNotImplemented:
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unimplemented, resp, optErrs...)
-	}
-
-	if resp.StatusCode >= 500 && resp.StatusCode <= 599 {
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unavailable, resp, optErrs...)
+		}
+		if resp.StatusCode >= 500 {
+			l.Error("base-http-client: HTTP error status", logFields...)
+		} else {
+			l.Warn("base-http-client: HTTP error status", logFields...)
+		}
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp, WrapErrorsWithRateLimitInfo(codes.Unknown, resp, append(optErrs, fmt.Errorf("unexpected status code: %d", resp.StatusCode))...)
+		grpcCode := GrpcCodeFromHTTPStatus(resp.StatusCode)
+		return resp, WrapErrorsWithRateLimitInfo(grpcCode, resp, optErrs...)
 	}
 
 	if req.Method == http.MethodGet && resp.StatusCode == http.StatusOK {
