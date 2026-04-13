@@ -419,6 +419,7 @@ type runnerConfig struct {
 	syncDifferConfig                      *syncDifferConfig
 	syncCompactorConfig                   *syncCompactorConfig
 	skipFullSync                          bool
+	workerCount                           int
 	targetedSyncResourceIDs               []string
 	externalResourceC1Z                   string
 	externalResourceEntitlementIdFilter   string
@@ -648,6 +649,13 @@ func WithActionsEnabled() Option {
 func WithFullSyncDisabled() Option {
 	return func(ctx context.Context, cfg *runnerConfig) error {
 		cfg.skipFullSync = true
+		return nil
+	}
+}
+
+func WithWorkerCount(workerCount int) Option {
+	return func(ctx context.Context, cfg *runnerConfig) error {
+		cfg.workerCount = workerCount
 		return nil
 	}
 }
@@ -960,7 +968,7 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 					SyncID:   c.syncIDs[i],
 				})
 			}
-			tm = local.NewLocalCompactor(ctx, cfg.syncCompactorConfig.outputPath, configs)
+			tm = local.NewLocalCompactor(ctx, cfg.syncCompactorConfig.outputPath, configs, cfg.tempDir)
 		default:
 			tm, err = local.NewSyncer(ctx, cfg.c1zPath,
 				local.WithTmpDir(cfg.tempDir),
@@ -970,6 +978,7 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 				local.WithSkipEntitlementsAndGrants(cfg.skipEntitlementsAndGrants),
 				local.WithSkipGrants(cfg.skipGrants),
 				local.WithSyncResourceTypeIDs(cfg.syncResourceTypeIDs),
+				local.WithWorkerCount(cfg.workerCount),
 			)
 			if err != nil {
 				return nil, err
@@ -982,7 +991,8 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 		return runner, nil
 	}
 
-	tm, err := c1api.NewC1TaskManager(ctx,
+	tm, err := c1api.NewC1TaskManager(
+		ctx,
 		cfg.clientID,
 		cfg.clientSecret,
 		cfg.tempDir,
@@ -991,6 +1001,7 @@ func NewConnectorRunner(ctx context.Context, c types.ConnectorServer, opts ...Op
 		cfg.externalResourceEntitlementIdFilter,
 		resources,
 		cfg.syncResourceTypeIDs,
+		cfg.workerCount,
 	)
 	if err != nil {
 		return nil, err

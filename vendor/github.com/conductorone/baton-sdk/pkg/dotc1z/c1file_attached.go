@@ -26,7 +26,7 @@ func (c *C1FileAttached) CompactTable(ctx context.Context, baseSyncID string, ap
 	defer span.End()
 
 	// Get the column structure for this table by querying the schema
-	columns, err := c.getTableColumns(ctx, tableName)
+	columns, err := c.getTableColumns(ctx, c.file.rawDb, tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get table columns: %w", err)
 	}
@@ -39,11 +39,12 @@ func (c *C1FileAttached) CompactTable(ctx context.Context, baseSyncID string, ap
 			columnList += ", "
 			selectList += ", "
 		}
-		columnList += col
+		qcol := quoteIdentifier(col)
+		columnList += qcol
 		if col == "sync_id" { //nolint:goconst,nolintlint // ...
-			selectList += "? as sync_id" //nolint:goconst,nolintlint // ...
+			selectList += "? as " + qcol //nolint:goconst,nolintlint // ...
 		} else {
-			selectList += col
+			selectList += qcol
 		}
 	}
 
@@ -71,13 +72,18 @@ func (c *C1FileAttached) CompactTable(ctx context.Context, baseSyncID string, ap
 	return err
 }
 
-func (c *C1FileAttached) getTableColumns(ctx context.Context, tableName string) ([]string, error) {
+// sqlQuerier is satisfied by both *sql.DB and *sql.Tx.
+type sqlQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func (c *C1FileAttached) getTableColumns(ctx context.Context, q sqlQuerier, tableName string) ([]string, error) {
 	if !c.safe {
 		return nil, errors.New("database has been detached")
 	}
 	// PRAGMA doesn't support parameter binding, so we format the table name directly
 	query := fmt.Sprintf("PRAGMA table_info(%s)", tableName)
-	rows, err := c.file.db.QueryContext(ctx, query)
+	rows, err := q.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +103,9 @@ func (c *C1FileAttached) getTableColumns(ctx context.Context, tableName string) 
 
 		// Skip the 'id' column as it's auto-increment
 		if name != "id" {
+			if err := validateColumnName(name); err != nil {
+				return nil, err
+			}
 			columns = append(columns, name)
 		}
 	}
@@ -198,6 +207,39 @@ func (c *C1FileAttached) GenerateSyncDiffFromFile(ctx context.Context, oldSyncID
 	ctx, span := tracer.Start(ctx, "C1FileAttached.GenerateSyncDiffFromFile")
 	defer span.End()
 
+	// Verify both source syncs have been backfilled and support diff before
+	// generating derived syncs. If they haven't, the expansion columns in
+	// copied grants may be incomplete.
+	var oldBackfilled, oldDiff int
+	err := c.file.rawDb.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT grants_backfilled, supports_diff FROM attached.%s WHERE sync_id = ?", syncRuns.Name()),
+		oldSyncID,
+	).Scan(&oldBackfilled, &oldDiff)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to check old sync %s readiness: %w", oldSyncID, err)
+	}
+	if oldBackfilled != 1 {
+		return "", "", fmt.Errorf("old sync %s has not been backfilled (grants_backfilled=%d)", oldSyncID, oldBackfilled)
+	}
+	if oldDiff != 1 {
+		return "", "", fmt.Errorf("old sync %s does not support diff (supports_diff=%d)", oldSyncID, oldDiff)
+	}
+
+	var newBackfilled, newDiff int
+	err = c.file.rawDb.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT grants_backfilled, supports_diff FROM main.%s WHERE sync_id = ?", syncRuns.Name()),
+		newSyncID,
+	).Scan(&newBackfilled, &newDiff)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to check new sync %s readiness: %w", newSyncID, err)
+	}
+	if newBackfilled != 1 {
+		return "", "", fmt.Errorf("new sync %s has not been backfilled (grants_backfilled=%d)", newSyncID, newBackfilled)
+	}
+	if newDiff != 1 {
+		return "", "", fmt.Errorf("new sync %s does not support diff (supports_diff=%d)", newSyncID, newDiff)
+	}
+
 	// Generate unique IDs for the diff syncs
 	deletionsSyncID := ksuid.New().String()
 	upsertsSyncID := ksuid.New().String()
@@ -221,12 +263,14 @@ func (c *C1FileAttached) GenerateSyncDiffFromFile(ctx context.Context, oldSyncID
 	// Create the deletions sync first (so upserts is "latest")
 	// Link it to upserts sync bidirectionally
 	deletionsInsert := c.file.db.Insert(syncRuns.Name()).Rows(goqu.Record{
-		"sync_id":        deletionsSyncID,
-		"started_at":     now,
-		"sync_token":     "",
-		"sync_type":      connectorstore.SyncTypePartialDeletions,
-		"parent_sync_id": oldSyncID,
-		"linked_sync_id": upsertsSyncID,
+		"sync_id":           deletionsSyncID,
+		"started_at":        now,
+		"sync_token":        "",
+		"sync_type":         connectorstore.SyncTypePartialDeletions,
+		"parent_sync_id":    oldSyncID,
+		"linked_sync_id":    upsertsSyncID,
+		"supports_diff":     1,
+		"grants_backfilled": 1,
 	})
 	query, args, err := deletionsInsert.ToSQL()
 	if err != nil {
@@ -238,12 +282,14 @@ func (c *C1FileAttached) GenerateSyncDiffFromFile(ctx context.Context, oldSyncID
 
 	// Create the upserts sync, linked to deletions sync
 	upsertsInsert := c.file.db.Insert(syncRuns.Name()).Rows(goqu.Record{
-		"sync_id":        upsertsSyncID,
-		"started_at":     now,
-		"sync_token":     "",
-		"sync_type":      connectorstore.SyncTypePartialUpserts,
-		"parent_sync_id": oldSyncID,
-		"linked_sync_id": deletionsSyncID,
+		"sync_id":           upsertsSyncID,
+		"started_at":        now,
+		"sync_token":        "",
+		"sync_type":         connectorstore.SyncTypePartialUpserts,
+		"parent_sync_id":    oldSyncID,
+		"linked_sync_id":    deletionsSyncID,
+		"supports_diff":     1,
+		"grants_backfilled": 1,
 	})
 	query, args, err = upsertsInsert.ToSQL()
 	if err != nil {
@@ -306,7 +352,7 @@ func (c *C1FileAttached) GenerateSyncDiffFromFile(ctx context.Context, oldSyncID
 // These are DELETIONS - items that existed before but no longer exist.
 // Uses the provided transaction.
 func (c *C1FileAttached) diffTableFromAttachedTx(ctx context.Context, tx *sql.Tx, tableName string, oldSyncID string, newSyncID string, targetSyncID string) error {
-	columns, err := c.getTableColumns(ctx, tableName)
+	columns, err := c.getTableColumns(ctx, tx, tableName)
 	if err != nil {
 		return err
 	}
@@ -319,17 +365,18 @@ func (c *C1FileAttached) diffTableFromAttachedTx(ctx context.Context, tx *sql.Tx
 			columnList += ", "
 			selectList += ", "
 		}
-		columnList += col
+		qcol := quoteIdentifier(col)
+		columnList += qcol
 		if col == "sync_id" {
-			selectList += "? as sync_id"
+			selectList += "? as " + qcol
 		} else {
-			selectList += col
+			selectList += qcol
 		}
 	}
 
 	// Insert items from attached (OLD) that don't exist in main (NEW)
 	// oldSyncID is in attached, newSyncID is in main
-	//nolint:gosec // table names are from hardcoded list, not user input
+	//nolint:gosec // table names are from hardcoded list; column names are validated
 	query := fmt.Sprintf(`
 		INSERT INTO main.%s (%s)
 		SELECT %s
@@ -349,7 +396,7 @@ func (c *C1FileAttached) diffTableFromAttachedTx(ctx context.Context, tx *sql.Tx
 // These are UPSERTS - items that are new or have changed.
 // Uses the provided transaction.
 func (c *C1FileAttached) diffTableFromMainTx(ctx context.Context, tx *sql.Tx, tableName string, oldSyncID string, newSyncID string, targetSyncID string) error {
-	columns, err := c.getTableColumns(ctx, tableName)
+	columns, err := c.getTableColumns(ctx, tx, tableName)
 	if err != nil {
 		return err
 	}
@@ -362,11 +409,12 @@ func (c *C1FileAttached) diffTableFromMainTx(ctx context.Context, tx *sql.Tx, ta
 			columnList += ", "
 			selectList += ", "
 		}
-		columnList += col
+		qcol := quoteIdentifier(col)
+		columnList += qcol
 		if col == "sync_id" {
-			selectList += "? as sync_id"
+			selectList += "? as " + qcol
 		} else {
-			selectList += col
+			selectList += qcol
 		}
 	}
 
@@ -374,7 +422,19 @@ func (c *C1FileAttached) diffTableFromMainTx(ctx context.Context, tx *sql.Tx, ta
 	// 1. Not in attached (OLD) - additions
 	// 2. In attached but with different data - modifications
 	// newSyncID is in main, oldSyncID is in attached
-	//nolint:gosec // table names are from hardcoded list, not user input
+	//
+	// For grants, we also compare the expansion column since GrantExpandable
+	// annotation is stored separately from data.
+	var dataCompare string
+	if tableName == grants.Name() {
+		// For grants: compare both data AND expansion columns.
+		// Use IFNULL to handle NULL expansion values.
+		dataCompare = "(a.data != m.data OR IFNULL(a.expansion, X'') != IFNULL(m.expansion, X''))"
+	} else {
+		dataCompare = "a.data != m.data"
+	}
+
+	//nolint:gosec // table names are from hardcoded list; column names are validated
 	query := fmt.Sprintf(`
 		INSERT INTO main.%s (%s)
 		SELECT %s
@@ -389,10 +449,10 @@ func (c *C1FileAttached) diffTableFromMainTx(ctx context.Context, tx *sql.Tx, ta
 		      SELECT 1 FROM attached.%s AS a 
 		      WHERE a.external_id = m.external_id 
 		        AND a.sync_id = ?
-		        AND a.data != m.data
+		        AND %s
 		    )
 		  )
-	`, tableName, columnList, selectList, tableName, tableName, tableName)
+	`, tableName, columnList, selectList, tableName, tableName, tableName, dataCompare)
 
 	_, err = tx.ExecContext(ctx, query, targetSyncID, newSyncID, oldSyncID, oldSyncID)
 	return err

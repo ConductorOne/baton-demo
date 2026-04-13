@@ -16,6 +16,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/sdk"
 	"github.com/conductorone/baton-sdk/pkg/sync"
 	"github.com/conductorone/baton-sdk/pkg/synccompactor/attached"
+	"github.com/conductorone/baton-sdk/pkg/tempdir"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
@@ -34,10 +35,12 @@ type Compactor struct {
 	entries       []*CompactableSync
 	compactedC1z  *dotc1z.C1File
 
-	tmpDir      string
-	destDir     string
-	runDuration time.Duration
-	syncLimit   int
+	tmpDir             string
+	destDir            string
+	runDuration        time.Duration
+	syncLimit          int
+	c1zOptions         []dotc1z.C1ZOption
+	skipGrantExpansion bool
 }
 
 type CompactableSync struct {
@@ -57,6 +60,7 @@ func WithTmpDir(tempDir string) Option {
 	}
 }
 
+// Deprecated: There is now only one compactor type, so this option is no longer needed.
 func WithCompactorType(compactorType CompactorType) Option {
 	return func(c *Compactor) {
 		c.compactorType = compactorType
@@ -76,6 +80,22 @@ func WithSyncLimit(limit int) Option {
 	}
 }
 
+// WithC1ZOptions sets the C1Z options to use for the compactor.
+// This allows tweaking C1Z opts such as encoder/decoder parallelism.
+func WithC1ZOptions(opts ...dotc1z.C1ZOption) Option {
+	return func(c *Compactor) {
+		c.c1zOptions = opts
+	}
+}
+
+// WithSkipGrantExpansion skips grant expansion after compaction.
+// This is useful when expansion will be handled separately (e.g. by incremental expansion).
+func WithSkipGrantExpansion() Option {
+	return func(c *Compactor) {
+		c.skipGrantExpansion = true
+	}
+}
+
 func NewCompactor(ctx context.Context, outputDir string, compactableSyncs []*CompactableSync, opts ...Option) (*Compactor, func() error, error) {
 	if len(compactableSyncs) < 2 {
 		return nil, nil, ErrNotEnoughFilesToCompact
@@ -90,15 +110,31 @@ func NewCompactor(ctx context.Context, outputDir string, compactableSyncs []*Com
 		opt(c)
 	}
 
-	// If no tmpDir is provided, use the tmpDir
-	if c.tmpDir == "" {
-		c.tmpDir = os.TempDir()
-	}
+	c.tmpDir = tempdir.Resolve(c.tmpDir)
 	tmpDir, err := os.MkdirTemp(c.tmpDir, "baton-sync-compactor-")
 	if err != nil {
 		return nil, nil, err
 	}
 	c.tmpDir = tmpDir
+
+	defaultC1ZOptions := []dotc1z.C1ZOption{
+		dotc1z.WithTmpDir(c.tmpDir),
+		// Performance improvements:
+		// NOTE: We do not close this c1z after compaction, so syncer will have these pragmas when expanding grants.
+		// We should re-evaluate these pragmas when partial syncs sync grants.
+		// Disable journaling.
+		dotc1z.WithPragma("journal_mode", "OFF"),
+		// Disable synchronous writes
+		dotc1z.WithPragma("synchronous", "OFF"),
+		// Use exclusive locking.
+		dotc1z.WithPragma("main.locking_mode", "EXCLUSIVE"),
+		// Use parallel decoding.
+		dotc1z.WithDecoderOptions(dotc1z.WithDecoderConcurrency(-1)),
+		// Use parallel encoding.
+		dotc1z.WithEncoderConcurrency(0),
+	}
+	// We would set the default options sooner, but we need to know the tmpDir first.
+	c.c1zOptions = append(defaultC1ZOptions, c.c1zOptions...)
 
 	cleanup := func() error {
 		if err := os.RemoveAll(c.tmpDir); err != nil {
@@ -143,22 +179,8 @@ func (c *Compactor) Compact(ctx context.Context) (*CompactableSync, error) {
 	default:
 	}
 
-	opts := []dotc1z.C1ZOption{
-		dotc1z.WithTmpDir(c.tmpDir),
-		// Performance improvements:
-		// NOTE: We do not close this c1z after compaction, so syncer will have these pragmas when expanding grants.
-		// We should re-evaluate these pragmas when partial syncs sync grants.
-		// Disable journaling.
-		dotc1z.WithPragma("journal_mode", "OFF"),
-		// Disable synchronous writes
-		dotc1z.WithPragma("synchronous", "OFF"),
-		// Use exclusive locking.
-		dotc1z.WithPragma("main.locking_mode", "EXCLUSIVE"),
-		// Use parallel decoding.
-		dotc1z.WithDecoderOptions(dotc1z.WithDecoderConcurrency(-1)),
-		// Use parallel encoding.
-		dotc1z.WithEncoderConcurrency(0),
-	}
+	opts := make([]dotc1z.C1ZOption, len(c.c1zOptions))
+	copy(opts, c.c1zOptions)
 	if c.syncLimit > 0 {
 		opts = append(opts, dotc1z.WithSyncLimit(c.syncLimit))
 	}
@@ -177,7 +199,7 @@ func (c *Compactor) Compact(ctx context.Context) (*CompactableSync, error) {
 		}
 		err := c.compactedC1z.Close(ctx)
 		if err != nil {
-			l.Error("error closing compacted c1z", zap.Error(err))
+			l.Error("compactor: error closing compacted c1z", zap.Error(err), zap.String("compacted_c1z_file", destFilePath))
 		}
 	}()
 	// Start new sync of type partial. If we compact syncs of other types, this sync type will be updated by attached.UpdateSync which is called by doOneCompaction().
@@ -214,7 +236,8 @@ func (c *Compactor) Compact(ctx context.Context) (*CompactableSync, error) {
 		return nil, fmt.Errorf("new sync id does not match expected id: %s != %s", newSync.GetId(), newSyncId)
 	}
 
-	if newSync.GetSyncType() == string(connectorstore.SyncTypePartial) {
+	skipExpansion := c.skipGrantExpansion || newSync.GetSyncType() == string(connectorstore.SyncTypePartial)
+	if skipExpansion {
 		err = c.compactedC1z.Cleanup(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to cleanup compacted c1z: %w", err)
@@ -294,10 +317,6 @@ func (c *Compactor) doOneCompaction(ctx context.Context, cs *CompactableSync) er
 		dotc1z.WithTmpDir(c.tmpDir),
 		dotc1z.WithDecoderOptions(dotc1z.WithDecoderConcurrency(-1)),
 		dotc1z.WithReadOnly(true),
-		// We're only reading, so it's safe to use these pragmas.
-		dotc1z.WithPragma("synchronous", "OFF"),
-		dotc1z.WithPragma("journal_mode", "OFF"),
-		dotc1z.WithPragma("locking_mode", "EXCLUSIVE"),
 	)
 	if err != nil {
 		return err

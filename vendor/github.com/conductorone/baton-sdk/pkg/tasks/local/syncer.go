@@ -26,6 +26,7 @@ type localSyncer struct {
 	skipEntitlementsAndGrants           bool
 	skipGrants                          bool
 	syncResourceTypeIDs                 []string
+	workerCount                         int
 }
 
 type Option func(*localSyncer)
@@ -72,6 +73,12 @@ func WithSkipGrants(skip bool) Option {
 	}
 }
 
+func WithWorkerCount(workerCount int) Option {
+	return func(m *localSyncer) {
+		m.workerCount = workerCount
+	}
+}
+
 func (m *localSyncer) GetTempDir() string {
 	return ""
 }
@@ -98,7 +105,8 @@ func (m *localSyncer) Process(ctx context.Context, task *v1.Task, cc types.Conne
 	if ssetSessionStore, ok := cc.(session.SetSessionStore); ok {
 		setSessionStore = ssetSessionStore
 	}
-	syncer, err := sdkSync.NewSyncer(ctx, cc,
+
+	syncOpts := []sdkSync.SyncOpt{
 		sdkSync.WithC1ZPath(m.dbPath),
 		sdkSync.WithTmpDir(m.tmpDir),
 		sdkSync.WithExternalResourceC1ZPath(m.externalResourceC1Z),
@@ -108,7 +116,10 @@ func (m *localSyncer) Process(ctx context.Context, task *v1.Task, cc types.Conne
 		sdkSync.WithSkipGrants(m.skipGrants),
 		sdkSync.WithSessionStore(setSessionStore),
 		sdkSync.WithSyncResourceTypes(m.syncResourceTypeIDs),
-	)
+		sdkSync.WithWorkerCount(m.workerCount),
+	}
+
+	syncer, err := sdkSync.NewSyncer(ctx, cc, syncOpts...)
 	if err != nil {
 		return err
 	}

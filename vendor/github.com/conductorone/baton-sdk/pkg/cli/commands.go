@@ -32,6 +32,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/conductorone/baton-sdk/pkg/logging"
 	"github.com/conductorone/baton-sdk/pkg/session"
+	"github.com/conductorone/baton-sdk/pkg/tempdir"
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/conductorone/baton-sdk/pkg/uotel"
@@ -186,6 +187,10 @@ func MakeMainCommand[T field.Configurable](
 					v.GetInt("health-check-port"),
 					v.GetString("health-check-bind-address"),
 				))
+			}
+			if len(v.GetStringSlice("sync-resource-types")) > 0 {
+				opts = append(opts,
+					connectorrunner.WithSyncResourceTypeIDs(v.GetStringSlice("sync-resource-types")))
 			}
 		} else {
 			switch {
@@ -353,12 +358,21 @@ func MakeMainCommand[T field.Configurable](
 			}
 		}
 
-		if v.GetString("c1z-temp-dir") != "" {
-			c1zTmpDir := v.GetString("c1z-temp-dir")
+		if v.GetBool(field.ParallelSyncField.GetName()) {
+			opts = append(opts, connectorrunner.WithWorkerCount(-1))
+		}
+
+		workers := v.GetInt(field.WorkerCountField.GetName())
+		if workers != 0 {
+			opts = append(opts, connectorrunner.WithWorkerCount(workers))
+		}
+
+		c1zTmpDir := tempdir.Resolve(v.GetString("c1z-temp-dir"))
+		if c1zTmpDir != "" {
 			if _, err := os.Stat(c1zTmpDir); os.IsNotExist(err) {
 				return fmt.Errorf("the specified c1z temp dir does not exist: %s", c1zTmpDir)
 			}
-			opts = append(opts, connectorrunner.WithTempDir(v.GetString("c1z-temp-dir")))
+			opts = append(opts, connectorrunner.WithTempDir(c1zTmpDir))
 		}
 
 		if v.GetString("external-resource-c1z") != "" {

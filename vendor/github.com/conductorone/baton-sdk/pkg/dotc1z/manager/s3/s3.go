@@ -53,29 +53,15 @@ func (s *s3Manager) copyToTempFile(ctx context.Context, r io.Reader) error {
 	s.tmpFile = f.Name()
 
 	if r != nil {
-		written, err := io.Copy(f, r)
+		_, err = io.Copy(f, r)
 		if err != nil {
 			_ = f.Close()
 			return err
 		}
 
-		// CRITICAL: Sync to ensure all data is written before file is used.
-		// This is especially important on ZFS ARC where writes may be cached
-		// and reads can happen before buffers are flushed to disk.
 		if err := f.Sync(); err != nil {
 			_ = f.Close()
 			return fmt.Errorf("failed to sync temp file: %w", err)
-		}
-
-		// Verify file size matches what we wrote (defensive check)
-		stat, err := f.Stat()
-		if err != nil {
-			_ = f.Close()
-			return fmt.Errorf("failed to stat temp file: %w", err)
-		}
-		if stat.Size() != written {
-			_ = f.Close()
-			return fmt.Errorf("file size mismatch: wrote %d bytes but file is %d bytes", written, stat.Size())
 		}
 	}
 
@@ -144,7 +130,6 @@ func (s *s3Manager) LoadC1Z(ctx context.Context) (*dotc1z.C1File, error) {
 
 	opts := []dotc1z.C1ZOption{
 		dotc1z.WithTmpDir(s.tmpDir),
-		dotc1z.WithPragma("journal_mode", "WAL"),
 	}
 	if len(s.decoderOptions) > 0 {
 		opts = append(opts, dotc1z.WithDecoderOptions(s.decoderOptions...))
