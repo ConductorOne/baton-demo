@@ -2595,6 +2595,7 @@ type Task_SyncFullTask struct {
 	xxx_hidden_SkipExpandGrants          bool                   `protobuf:"varint,2,opt,name=skip_expand_grants,json=skipExpandGrants,proto3"`
 	xxx_hidden_SkipEntitlementsAndGrants bool                   `protobuf:"varint,3,opt,name=skip_entitlements_and_grants,json=skipEntitlementsAndGrants,proto3"`
 	xxx_hidden_TargetedSyncResources     *[]*v2.Resource        `protobuf:"bytes,4,rep,name=targeted_sync_resources,json=targetedSyncResources,proto3"`
+	xxx_hidden_SyncResourceTypeIds       []string               `protobuf:"bytes,5,rep,name=sync_resource_type_ids,json=syncResourceTypeIds,proto3"`
 	unknownFields                        protoimpl.UnknownFields
 	sizeCache                            protoimpl.SizeCache
 }
@@ -2656,6 +2657,13 @@ func (x *Task_SyncFullTask) GetTargetedSyncResources() []*v2.Resource {
 	return nil
 }
 
+func (x *Task_SyncFullTask) GetSyncResourceTypeIds() []string {
+	if x != nil {
+		return x.xxx_hidden_SyncResourceTypeIds
+	}
+	return nil
+}
+
 func (x *Task_SyncFullTask) SetAnnotations(v []*anypb.Any) {
 	x.xxx_hidden_Annotations = &v
 }
@@ -2672,6 +2680,10 @@ func (x *Task_SyncFullTask) SetTargetedSyncResources(v []*v2.Resource) {
 	x.xxx_hidden_TargetedSyncResources = &v
 }
 
+func (x *Task_SyncFullTask) SetSyncResourceTypeIds(v []string) {
+	x.xxx_hidden_SyncResourceTypeIds = v
+}
+
 type Task_SyncFullTask_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
@@ -2679,6 +2691,7 @@ type Task_SyncFullTask_builder struct {
 	SkipExpandGrants          bool
 	SkipEntitlementsAndGrants bool
 	TargetedSyncResources     []*v2.Resource
+	SyncResourceTypeIds       []string
 }
 
 func (b0 Task_SyncFullTask_builder) Build() *Task_SyncFullTask {
@@ -2689,6 +2702,7 @@ func (b0 Task_SyncFullTask_builder) Build() *Task_SyncFullTask {
 	x.xxx_hidden_SkipExpandGrants = b.SkipExpandGrants
 	x.xxx_hidden_SkipEntitlementsAndGrants = b.SkipEntitlementsAndGrants
 	x.xxx_hidden_TargetedSyncResources = &b.TargetedSyncResources
+	x.xxx_hidden_SyncResourceTypeIds = b.SyncResourceTypeIds
 	return m0
 }
 
@@ -5164,7 +5178,7 @@ var File_c1_connectorapi_baton_v1_baton_proto protoreflect.FileDescriptor
 
 const file_c1_connectorapi_baton_v1_baton_proto_rawDesc = "" +
 	"\n" +
-	"$c1/connectorapi/baton/v1/baton.proto\x12\x18c1.connectorapi.baton.v1\x1a\x1fc1/connector/v2/connector.proto\x1a!c1/connector/v2/entitlement.proto\x1a\x1bc1/connector/v2/grant.proto\x1a\x1ec1/connector/v2/resource.proto\x1a\x1cc1/connector/v2/ticket.proto\x1a\x19google/protobuf/any.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17google/rpc/status.proto\x1a\x17validate/validate.proto\"\xa2-\n" +
+	"$c1/connectorapi/baton/v1/baton.proto\x12\x18c1.connectorapi.baton.v1\x1a\x1fc1/connector/v2/connector.proto\x1a!c1/connector/v2/entitlement.proto\x1a\x1bc1/connector/v2/grant.proto\x1a\x1ec1/connector/v2/resource.proto\x1a\x1cc1/connector/v2/ticket.proto\x1a\x19google/protobuf/any.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17google/rpc/status.proto\x1a\x17validate/validate.proto\"\xd7-\n" +
 	"\x04Task\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12=\n" +
 	"\x06status\x18\x02 \x01(\x0e2%.c1.connectorapi.baton.v1.Task.StatusR\x06status\x12=\n" +
@@ -5198,12 +5212,13 @@ const file_c1_connectorapi_baton_v1_baton_proto_rawDesc = "" +
 	"\bNoneTask\x126\n" +
 	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1aC\n" +
 	"\tHelloTask\x126\n" +
-	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1a\x88\x02\n" +
+	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x1a\xbd\x02\n" +
 	"\fSyncFullTask\x126\n" +
 	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x12,\n" +
 	"\x12skip_expand_grants\x18\x02 \x01(\bR\x10skipExpandGrants\x12?\n" +
 	"\x1cskip_entitlements_and_grants\x18\x03 \x01(\bR\x19skipEntitlementsAndGrants\x12Q\n" +
-	"\x17targeted_sync_resources\x18\x04 \x03(\v2\x19.c1.connector.v2.ResourceR\x15targetedSyncResources\x1a~\n" +
+	"\x17targeted_sync_resources\x18\x04 \x03(\v2\x19.c1.connector.v2.ResourceR\x15targetedSyncResources\x123\n" +
+	"\x16sync_resource_type_ids\x18\x05 \x03(\tR\x13syncResourceTypeIds\x1a~\n" +
 	"\rEventFeedTask\x126\n" +
 	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\x125\n" +
 	"\bstart_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\astartAt\x1a\xe7\x01\n" +
@@ -5287,41 +5302,30 @@ const file_c1_connectorapi_baton_v1_baton_proto_rawDesc = "" +
 	"\x10STATUS_SCHEDULED\x10\x02\x12\x12\n" +
 	"\x0eSTATUS_RUNNING\x10\x03\x12\x13\n" +
 	"\x0fSTATUS_FINISHED\x10\x04B\v\n" +
-	"\ttask_type\"\xf3\a\n" +
+	"\ttask_type\"\xc9\a\n" +
 	"\x18BatonServiceHelloRequest\x12#\n" +
 	"\ahost_id\x18\x01 \x01(\tB\n" +
 	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\x06hostId\x122\n" +
-	"\atask_id\x18\x02 \x01(\tB\x19\xfaB\x16r\x142\x12^[a-zA-Z0-9]{27}|$R\x06taskId\x12e\n" +
+	"\atask_id\x18\x02 \x01(\tB\x19\xfaB\x16r\x142\x12^[a-zA-Z0-9]{27}|$R\x06taskId\x12[\n" +
 	"\n" +
-	"build_info\x18\x03 \x01(\v2<.c1.connectorapi.baton.v1.BatonServiceHelloRequest.BuildInfoB\b\xfaB\x05\x8a\x01\x02\x10\x01R\tbuildInfo\x12\\\n" +
-	"\aos_info\x18\x04 \x01(\v29.c1.connectorapi.baton.v1.BatonServiceHelloRequest.OSInfoB\b\xfaB\x05\x8a\x01\x02\x10\x01R\x06osInfo\x12[\n" +
+	"build_info\x18\x03 \x01(\v2<.c1.connectorapi.baton.v1.BatonServiceHelloRequest.BuildInfoR\tbuildInfo\x12R\n" +
+	"\aos_info\x18\x04 \x01(\v29.c1.connectorapi.baton.v1.BatonServiceHelloRequest.OSInfoR\x06osInfo\x12[\n" +
 	"\x12connector_metadata\x18\x05 \x01(\v2\".c1.connector.v2.ConnectorMetadataB\b\xfaB\x05\x8a\x01\x02\x10\x01R\x11connectorMetadata\x12@\n" +
-	"\vannotations\x18\x06 \x03(\v2\x14.google.protobuf.AnyB\b\xfaB\x05\x92\x01\x02\x10\x10R\vannotations\x1a\x95\x01\n" +
-	"\tBuildInfo\x12-\n" +
-	"\flang_version\x18\x01 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\vlangVersion\x12$\n" +
-	"\apackage\x18\x02 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\apackage\x123\n" +
-	"\x0fpackage_version\x18\x03 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\x0epackageVersion\x1a\x81\x03\n" +
-	"\x06OSInfo\x12&\n" +
-	"\bhostname\x18\x01 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\bhostname\x12\x1a\n" +
-	"\x02os\x18\x02 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\x02os\x12&\n" +
-	"\bplatform\x18\x03 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\bplatform\x125\n" +
-	"\x10platform_version\x18\x04 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\x0fplatformVersion\x123\n" +
-	"\x0fplatform_family\x18\x05 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\x0eplatformFamily\x121\n" +
-	"\x0ekernel_version\x18\x06 \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\rkernelVersion\x12+\n" +
-	"\vkernel_arch\x18\a \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\n" +
-	"kernelArch\x12?\n" +
-	"\x15virtualization_system\x18\b \x01(\tB\n" +
-	"\xfaB\ar\x05\x10\x01\x18\x80\x02R\x14virtualizationSystem\"S\n" +
+	"\vannotations\x18\x06 \x03(\v2\x14.google.protobuf.AnyB\b\xfaB\x05\x92\x01\x02\x10\x10R\vannotations\x1a\x8f\x01\n" +
+	"\tBuildInfo\x12+\n" +
+	"\flang_version\x18\x01 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\vlangVersion\x12\"\n" +
+	"\apackage\x18\x02 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\apackage\x121\n" +
+	"\x0fpackage_version\x18\x03 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\x0epackageVersion\x1a\xf1\x02\n" +
+	"\x06OSInfo\x12$\n" +
+	"\bhostname\x18\x01 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\bhostname\x12\x18\n" +
+	"\x02os\x18\x02 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\x02os\x12$\n" +
+	"\bplatform\x18\x03 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\bplatform\x123\n" +
+	"\x10platform_version\x18\x04 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\x0fplatformVersion\x121\n" +
+	"\x0fplatform_family\x18\x05 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\x0eplatformFamily\x12/\n" +
+	"\x0ekernel_version\x18\x06 \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\rkernelVersion\x12)\n" +
+	"\vkernel_arch\x18\a \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\n" +
+	"kernelArch\x12=\n" +
+	"\x15virtualization_system\x18\b \x01(\tB\b\xfaB\x05r\x03\x18\x80\x02R\x14virtualizationSystem\"S\n" +
 	"\x19BatonServiceHelloResponse\x126\n" +
 	"\vannotations\x18\x01 \x03(\v2\x14.google.protobuf.AnyR\vannotations\"A\n" +
 	"\x1aBatonServiceGetTaskRequest\x12#\n" +
