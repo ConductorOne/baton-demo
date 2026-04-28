@@ -3,6 +3,7 @@ package c1api
 import (
 	"context"
 	"errors"
+	"runtime"
 	"runtime/debug"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -13,6 +14,7 @@ import (
 	v1 "github.com/conductorone/baton-sdk/pb/c1/connectorapi/baton/v1"
 	"github.com/conductorone/baton-sdk/pkg/tasks"
 	"github.com/conductorone/baton-sdk/pkg/types"
+	"github.com/conductorone/baton-sdk/pkg/uotel"
 )
 
 type helloHelpers interface {
@@ -34,12 +36,33 @@ func (c *helloTaskHandler) osInfo(ctx context.Context) (*v1.BatonServiceHelloReq
 		return nil, err
 	}
 
+	// The Hello message requires these fields to be set. If any are empty, the connector will fail to register with C1.
 	if info.VirtualizationSystem == "" {
 		info.VirtualizationSystem = "none"
 	}
 
+	if info.Hostname == "" {
+		info.Hostname = "unknown"
+	}
+
+	if info.Platform == "" {
+		info.Platform = info.OS
+	}
+
+	if info.PlatformFamily == "" {
+		info.PlatformFamily = info.Platform
+	}
+
+	if info.KernelVersion == "" {
+		info.KernelVersion = "unknown"
+	}
+
 	if info.PlatformVersion == "" {
 		info.PlatformVersion = info.KernelVersion
+	}
+
+	if info.KernelArch == "" {
+		info.KernelArch = runtime.GOARCH
 	}
 
 	return v1.BatonServiceHelloRequest_OSInfo_builder{
@@ -91,8 +114,8 @@ func (c *helloTaskHandler) buildInfo(ctx context.Context) *v1.BatonServiceHelloR
 
 func (c *helloTaskHandler) HandleTask(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "helloTaskHandler.HandleTask")
-	defer span.End()
-
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 	if c.task == nil {
 		return errors.New("cannot handle task: task is nil")
 	}

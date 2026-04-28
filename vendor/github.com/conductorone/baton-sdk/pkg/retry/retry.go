@@ -3,6 +3,7 @@ package retry
 import (
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -16,6 +17,7 @@ import (
 var tracer = otel.Tracer("baton-sdk/retry")
 
 type Retryer struct {
+	mu           sync.Mutex
 	attempts     uint
 	maxAttempts  uint
 	initialDelay time.Duration
@@ -49,27 +51,36 @@ func (r *Retryer) ShouldWaitAndRetry(ctx context.Context, err error) bool {
 	defer span.End()
 
 	if err == nil {
+		r.mu.Lock()
 		r.attempts = 0
+		r.mu.Unlock()
 		return true
 	}
 	if status.Code(err) != codes.Unavailable && status.Code(err) != codes.DeadlineExceeded {
 		return false
 	}
 
+	r.mu.Lock()
 	r.attempts++
+	attempts := r.attempts
+	maxAttempts := r.maxAttempts
+	initialDelay := r.initialDelay
+	maxDelay := r.maxDelay
+	r.mu.Unlock()
+
 	l := ctxzap.Extract(ctx)
 
-	if r.maxAttempts > 0 && r.attempts > r.maxAttempts {
-		l.Warn("max attempts reached", zap.Error(err), zap.Uint("max_attempts", r.maxAttempts))
+	if maxAttempts > 0 && attempts > maxAttempts {
+		l.Warn("max attempts reached", zap.Error(err), zap.Uint("max_attempts", maxAttempts))
 		return false
 	}
 
 	// use linear backoff by default
 	var wait time.Duration
-	if r.attempts > math.MaxInt64 {
-		wait = r.maxDelay
+	if attempts > math.MaxInt64 {
+		wait = maxDelay
 	} else {
-		wait = time.Duration(int64(r.attempts)) * r.initialDelay
+		wait = time.Duration(int64(attempts)) * initialDelay
 	}
 
 	// If error contains rate limit data, use that instead
@@ -81,11 +92,14 @@ func (r *Retryer) ShouldWaitAndRetry(ctx context.Context, err error) bool {
 				if waitResetAt <= 0 {
 					continue
 				}
-				duration := time.Duration(rlData.GetLimit())
-				if duration <= 0 {
-					continue
+				remaining := rlData.GetRemaining()
+				if remaining <= 0 {
+					// No requests remaining, so we need to wait until the reset time.
+					wait = waitResetAt
+					break
 				}
-				waitResetAt /= duration
+				// Divide the wait time by the remaining requests to get the time to wait per request.
+				waitResetAt /= time.Duration(remaining)
 				// Round up to the nearest second to make sure we don't hit the rate limit again
 				waitResetAt = time.Duration(math.Ceil(waitResetAt.Seconds())) * time.Second
 				if waitResetAt > 0 {
@@ -96,8 +110,8 @@ func (r *Retryer) ShouldWaitAndRetry(ctx context.Context, err error) bool {
 		}
 	}
 
-	if wait > r.maxDelay {
-		wait = r.maxDelay
+	if wait > maxDelay {
+		wait = maxDelay
 	}
 
 	l.Warn("retrying operation", zap.Error(err), zap.Duration("wait", wait))

@@ -198,10 +198,10 @@ func OptionallyAddLambdaCommand[T field.Configurable](
 		}
 
 		if err := field.Validate(connectorSchema, t, fieldOptions...); err != nil {
-			return fmt.Errorf("lambda-run: failed to validate config: %w", err)
+			return fmt.Errorf("failed to validate config: %w", err)
 		}
 
-		clientSecret := v.GetString("client-secret")
+		clientSecret := v.GetString("lambda-client-secret")
 		if clientSecret != "" {
 			secretJwk, err := crypto.ParseClientSecret([]byte(clientSecret), true)
 			if err != nil {
@@ -226,7 +226,8 @@ func OptionallyAddLambdaCommand[T field.Configurable](
 					otterOptions.MaximumWeight = uint64(sessionStoreMaximumSize)
 				}
 			}),
-			SelectedAuthMethod: authMethodStr,
+			SelectedAuthMethod:  authMethodStr,
+			SyncResourceTypeIDs: v.GetStringSlice("sync-resource-types"),
 		}
 
 		if hasOauthField(schemaFields) {
@@ -238,7 +239,7 @@ func OptionallyAddLambdaCommand[T field.Configurable](
 		}
 		c, err := getconnector(runCtx, t, ops)
 		if err != nil {
-			return fmt.Errorf("lambda-run: failed to get connector: %w", err)
+			return fmt.Errorf("failed to get connector: %w", err)
 		}
 
 		// Ensure only one auth method is provided
@@ -294,9 +295,14 @@ type lambdaTokenSource struct {
 	ctx    context.Context
 	webKey *jose.JSONWebKey
 	client v1.ConnectorConfigServiceClient
+	token  *oauth2.Token
 }
 
 func (s *lambdaTokenSource) Token() (*oauth2.Token, error) {
+	if s.token.Valid() {
+		return s.token, nil
+	}
+
 	resp, err := s.client.GetConnectorOauthToken(s.ctx, &v1.GetConnectorOauthTokenRequest{})
 	if err != nil {
 		return nil, err
@@ -317,6 +323,8 @@ func (s *lambdaTokenSource) Token() (*oauth2.Token, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lambda-run: failed to unmarshal decrypted config: %w", err)
 	}
+
+	s.token = &t
 	return &t, nil
 }
 
