@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -32,6 +33,7 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/conductorone/baton-sdk/pkg/logging"
 	"github.com/conductorone/baton-sdk/pkg/session"
+	"github.com/conductorone/baton-sdk/pkg/tempdir"
 	"github.com/conductorone/baton-sdk/pkg/types/sessions"
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/conductorone/baton-sdk/pkg/uotel"
@@ -186,6 +188,10 @@ func MakeMainCommand[T field.Configurable](
 					v.GetInt("health-check-port"),
 					v.GetString("health-check-bind-address"),
 				))
+			}
+			if len(v.GetStringSlice("sync-resource-types")) > 0 {
+				opts = append(opts,
+					connectorrunner.WithSyncResourceTypeIDs(v.GetStringSlice("sync-resource-types")))
 			}
 		} else {
 			switch {
@@ -353,12 +359,21 @@ func MakeMainCommand[T field.Configurable](
 			}
 		}
 
-		if v.GetString("c1z-temp-dir") != "" {
-			c1zTmpDir := v.GetString("c1z-temp-dir")
+		if v.GetBool(field.ParallelSyncField.GetName()) {
+			opts = append(opts, connectorrunner.WithWorkerCount(-1))
+		}
+
+		workers := v.GetInt(field.WorkerCountField.GetName())
+		if workers != 0 {
+			opts = append(opts, connectorrunner.WithWorkerCount(workers))
+		}
+
+		c1zTmpDir := tempdir.Resolve(v.GetString("c1z-temp-dir"))
+		if c1zTmpDir != "" {
 			if _, err := os.Stat(c1zTmpDir); os.IsNotExist(err) {
 				return fmt.Errorf("the specified c1z temp dir does not exist: %s", c1zTmpDir)
 			}
-			opts = append(opts, connectorrunner.WithTempDir(v.GetString("c1z-temp-dir")))
+			opts = append(opts, connectorrunner.WithTempDir(c1zTmpDir))
 		}
 
 		if v.GetString("external-resource-c1z") != "" {
@@ -391,8 +406,18 @@ func MakeMainCommand[T field.Configurable](
 		}
 		runCtx = context.WithValue(runCtx, uhttp.ContextHTTPTimeoutKey, time.Duration(httpTimeout)*time.Second)
 
+		taskConcurrency := v.GetInt(field.TaskConcurrencyField.GetName())
+		taskConcurrencyField := field.TaskConcurrencyField
+		if _, err := field.ValidateField(&taskConcurrencyField, taskConcurrency); err != nil {
+			return err
+		}
+		opts = append(opts, connectorrunner.WithTaskConcurrency(taskConcurrency))
+
 		// Save the selected authentication method and get the connector.
-		c, err := getconnector(runCtx, t, RunTimeOpts{SelectedAuthMethod: v.GetString("auth-method")})
+		c, err := getconnector(runCtx, t, RunTimeOpts{
+			SelectedAuthMethod:  v.GetString("auth-method"),
+			SyncResourceTypeIDs: v.GetStringSlice("sync-resource-types"),
+		})
 		if err != nil {
 			return err
 		}
@@ -571,7 +596,8 @@ func MakeGRPCServerCommand[T field.Configurable](
 					otterOptions.MaximumWeight = uint64(sessionStoreMaximumSize)
 				}
 			}),
-			SelectedAuthMethod: v.GetString("auth-method"),
+			SelectedAuthMethod:  v.GetString("auth-method"),
+			SyncResourceTypeIDs: v.GetStringSlice("sync-resource-types"),
 		})
 		if err != nil {
 			return err
@@ -679,7 +705,10 @@ func MakeCapabilitiesCommand[T field.Configurable](
 				return err
 			}
 
-			c, err = getconnector(runCtx, t, RunTimeOpts{SelectedAuthMethod: authMethod})
+			c, err = getconnector(runCtx, t, RunTimeOpts{
+				SelectedAuthMethod:  authMethod,
+				SyncResourceTypeIDs: v.GetStringSlice("sync-resource-types"),
+			})
 			if err != nil {
 				return err
 			}
@@ -731,7 +760,15 @@ func MakeCapabilitiesCommand[T field.Configurable](
 			return err
 		}
 
-		_, err = fmt.Fprint(os.Stdout, string(outBytes))
+		// Re-indent to normalize protojson's non-deterministic whitespace.
+		// protojson uses detrand.Bool() to randomly insert extra spaces after colons;
+		// json.Indent rewrites all whitespace from the token stream, preserving key order.
+		var normalized bytes.Buffer
+		if err := json.Indent(&normalized, outBytes, "", "  "); err != nil {
+			return err
+		}
+
+		_, err = fmt.Fprint(os.Stdout, normalized.String())
 		if err != nil {
 			return err
 		}

@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"reflect"
+	"strings"
+	"sync"
 
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/field"
@@ -16,9 +20,10 @@ import (
 )
 
 type RunTimeOpts struct {
-	SessionStore       sessions.SessionStore
-	TokenSource        oauth2.TokenSource
-	SelectedAuthMethod string
+	SessionStore        sessions.SessionStore
+	TokenSource         oauth2.TokenSource
+	SelectedAuthMethod  string
+	SyncResourceTypeIDs []string
 }
 
 // GetConnectorFunc is a function type that creates a connector instance.
@@ -35,10 +40,60 @@ func WithSessionCache(ctx context.Context, constructor sessions.SessionStoreCons
 	return context.WithValue(ctx, sessions.SessionStoreKey{}, sessionCache), nil
 }
 
+// ConnectorOpts holds runtime options passed to a connector at initialization time.
 type ConnectorOpts struct {
 	TokenSource        oauth2.TokenSource
 	SelectedAuthMethod string
+
+	// SyncResourceTypeIDs is the set of resource type IDs the user has requested
+	// to sync. An empty slice means "sync everything the connector advertises"
+	// (subject to OptInRequired{} annotations on resource types). A non-empty
+	// slice means "sync only these types; skip everything else." Connectors
+	// should prefer the helper methods (WillSyncResourceType,
+	// SyncFilterIsExplicit, SyncResourceTypeSet) over reading this slice
+	// directly.
+	SyncResourceTypeIDs []string
+
+	syncResourceTypeSetOnce sync.Once
+	syncResourceTypeSetVal  map[string]struct{}
 }
+
+// SyncFilterIsExplicit reports whether the user has explicitly narrowed the set
+// of resource types to sync. Returns false when SyncResourceTypeIDs is empty,
+// meaning "sync all types the connector advertises".
+func (o *ConnectorOpts) SyncFilterIsExplicit() bool {
+	return len(o.SyncResourceTypeIDs) > 0
+}
+
+// SyncResourceTypeSet returns the user's selection as a set for O(1) lookup,
+// or nil if no filter was specified (meaning all resource types should be
+// synced). The set is computed lazily on first call and cached for subsequent
+// calls.
+func (o *ConnectorOpts) SyncResourceTypeSet() map[string]struct{} {
+	if !o.SyncFilterIsExplicit() {
+		return nil
+	}
+	o.syncResourceTypeSetOnce.Do(func() {
+		s := make(map[string]struct{}, len(o.SyncResourceTypeIDs))
+		for _, id := range o.SyncResourceTypeIDs {
+			s[id] = struct{}{}
+		}
+		o.syncResourceTypeSetVal = s
+	})
+	return o.syncResourceTypeSetVal
+}
+
+// WillSyncResourceType reports whether the given resource type ID will be
+// synced under the current configuration. Returns true when the user has not
+// specified any filter (the "default to all" case).
+func (o *ConnectorOpts) WillSyncResourceType(resourceTypeID string) bool {
+	if !o.SyncFilterIsExplicit() {
+		return true
+	}
+	_, ok := o.SyncResourceTypeSet()[resourceTypeID]
+	return ok
+}
+
 type NewConnector[T field.Configurable] func(ctx context.Context, cfg T, opts *ConnectorOpts) (connectorbuilder.ConnectorBuilderV2, []connectorbuilder.Opt, error)
 
 func MakeGenericConfiguration[T field.Configurable](v *viper.Viper, opts ...field.DecodeHookOption) (T, error) {
@@ -66,7 +121,44 @@ func MakeGenericConfiguration[T field.Configurable](v *viper.Viper, opts ...fiel
 // pass values through environment variables.
 func VisitFlags(cmd *cobra.Command, v *viper.Viper) {
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
-		if v.IsSet(f.Name) {
+		if !v.IsSet(f.Name) {
+			return
+		}
+
+		// v.GetString() mangles non-scalar types: YAML arrays become "[a b c]"
+		// and maps become "map[k:v]". Use type-appropriate getters so that
+		// pflag receives a properly formatted value for Set().
+		switch f.Value.Type() {
+		case "stringSlice":
+			switch v.Get(f.Name).(type) {
+			case []interface{}, []string:
+				// From YAML/config file: viper parsed individual elements.
+				// CSV-encode so pflag's readAsCSV() preserves values that
+				// contain commas (e.g. LDAP DNs like "OU=X,DC=Y").
+				ss := v.GetStringSlice(f.Name)
+				if len(ss) > 0 {
+					var buf bytes.Buffer
+					w := csv.NewWriter(&buf)
+					_ = w.Write(ss)
+					w.Flush()
+					_ = cmd.Flags().Set(f.Name, strings.TrimSuffix(buf.String(), "\n"))
+				}
+			default:
+				// From env var or other string source: pass the raw string
+				// to pflag so it splits on commas as expected.
+				_ = cmd.Flags().Set(f.Name, v.GetString(f.Name))
+			}
+		case "stringToString":
+			sm := v.GetStringMapString(f.Name)
+			if len(sm) > 0 {
+				// pflag expects "key=value" CSV format.
+				pairs := make([]string, 0, len(sm))
+				for k, val := range sm {
+					pairs = append(pairs, k+"="+val)
+				}
+				_ = cmd.Flags().Set(f.Name, strings.Join(pairs, ","))
+			}
+		default:
 			_ = cmd.Flags().Set(f.Name, v.GetString(f.Name))
 		}
 	})

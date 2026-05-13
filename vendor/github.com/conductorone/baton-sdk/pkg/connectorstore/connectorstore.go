@@ -51,6 +51,48 @@ type Reader interface {
 	Close(ctx context.Context) error
 }
 
+// LatestFinishedSyncIDFetcher returns the most-recently-finished sync ID of the
+// given type, or empty string if no such sync exists. This is a small optional
+// capability separate from Reader/Writer because not every store implementation
+// can answer it (e.g. gRPC-backed readers have a different flavor via
+// SyncsReaderServiceGetLatestFinishedSync).
+//
+// This interface lives in connectorstore so that producers (e.g. *dotc1z.C1File)
+// and consumers (e.g. pkg/sync) reference a single authoritative declaration,
+// preventing the name/signature drift that occurred between PR #473 and RFC 0002.
+type LatestFinishedSyncIDFetcher interface {
+	LatestFinishedSyncID(ctx context.Context, syncType SyncType) (string, error)
+}
+
+// DBSizeProvider is an optional capability for a store that can report its
+// current uncompressed working-set size (e.g. dotc1z.C1File stat'ing its
+// sqlite file). Consumed by the syncer's ProgressLog to include
+// decompressed_bytes and growth delta in the periodic "Expanding grants"
+// log during long-running grant expansions — the Expander itself is
+// recreated each RunSingleStep by the syncer, so this state cannot live
+// there.
+type DBSizeProvider interface {
+	CurrentDBSizeBytes() (int64, error)
+}
+
+// GrantUpsertMode controls how grant conflicts are resolved during upsert.
+type GrantUpsertMode int
+
+const (
+	// GrantUpsertModeReplace updates conflicting grants unconditionally.
+	GrantUpsertModeReplace GrantUpsertMode = iota
+	// GrantUpsertModeIfNewer updates conflicting grants only when EXCLUDED.discovered_at is newer.
+	GrantUpsertModeIfNewer
+	// GrantUpsertModePreserveExpansion updates grant data while preserving existing
+	// expansion and needs_expansion columns.
+	GrantUpsertModePreserveExpansion
+)
+
+// GrantUpsertOptions configures internal grant upsert behavior.
+type GrantUpsertOptions struct {
+	Mode GrantUpsertMode
+}
+
 // ConnectorStoreWriter defines an implementation for a connector v2 datasource writer. This is used to store sync data from an upstream provider.
 type Writer interface {
 	Reader

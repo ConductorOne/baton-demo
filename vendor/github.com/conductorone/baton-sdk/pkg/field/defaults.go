@@ -15,10 +15,14 @@ const (
 	OtelCollectorEndpointTLSInsecureFieldName = "otel-collector-endpoint-tls-insecure"
 	OtelTracingDisabledFieldName              = "otel-tracing-disabled"
 	OtelLoggingDisabledFieldName              = "otel-logging-disabled"
+
+	// TaskConcurrencySchemaDefault is the configured default for [TaskConcurrencyField].
+	TaskConcurrencySchemaDefault = 3
 )
 
 func defaultLogFormat() any {
 	// If stdout is a TTY, use console format, otherwise use JSON
+
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		return logging.LogFormatConsole
 	}
@@ -94,7 +98,13 @@ var (
 		WithDescription("The timestamp indicating when debug-level logging should expire"),
 		WithPersistent(true),
 		WithExportTarget(ExportTargetOps))
-	skipFullSync              = BoolField("skip-full-sync", WithDescription("This must be set to skip a full sync"), WithPersistent(true), WithExportTarget(ExportTargetNone))
+	skipFullSync     = BoolField("skip-full-sync", WithDescription("This must be set to skip a full sync"), WithPersistent(true), WithExportTarget(ExportTargetNone))
+	WorkerCountField = IntField("workers",
+		WithDescription("The number of sync workers to use. -1 for auto-detect, 0 for sequential, >0 for parallel"),
+		WithDefaultValue(0),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone))
+	ParallelSyncField         = BoolField("parallel-sync", WithDescription("Deprecated: use --workers instead."), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	targetedSyncResourceIDs   = StringSliceField("sync-resources", WithDescription("The resource IDs to sync"), WithPersistent(true), WithExportTarget(ExportTargetNone))
 	skipEntitlementsAndGrants = BoolField("skip-entitlements-and-grants",
 		WithDescription("This must be set to skip syncing of entitlements and grants"),
@@ -318,6 +328,19 @@ var (
 		WithInt(func(r *IntRuler) {
 			r.Gte(1).Lte(1800)
 		}))
+
+	// TaskConcurrencyField limits concurrent Baton task execution in the runner
+	// (service mode). Semantics match [WorkerCountField] / sync worker parallelism.
+	TaskConcurrencyField = IntField("task-concurrency",
+		WithDescription("The number of Baton tasks to run concurrently in service mode. "+
+			"Tasks may include sync, grant, revoke, and more. "+
+			"Minimum value is 1, maximum value is 100."),
+		WithDefaultValue(TaskConcurrencySchemaDefault),
+		WithInt(func(r *IntRuler) {
+			r.Gte(1).Lte(100)
+		}),
+		WithPersistent(true),
+		WithExportTarget(ExportTargetNone))
 )
 
 func LambdaServerFields() []SchemaField {
@@ -392,6 +415,8 @@ var DefaultFields = []SchemaField{
 	invokeResourceActionTypeField,
 	invokeResourceActionArgsField,
 	ServerSessionStoreMaximumSizeField,
+	WorkerCountField,
+	ParallelSyncField,
 
 	otelCollectorEndpoint,
 	otelCollectorEndpointTLSCertPath,
@@ -407,6 +432,7 @@ var DefaultFields = []SchemaField{
 	healthCheckBindAddressField,
 
 	HttpTimeoutField,
+	TaskConcurrencyField,
 }
 
 func IsFieldAmongDefaultList(f SchemaField) bool {

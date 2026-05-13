@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,12 +25,15 @@ import (
 	// and allocates a ton of memory.
 	_ "github.com/doug-martin/goqu/v9/dialect/sqlite3"
 
-	_ "github.com/glebarez/go-sqlite"
+	_ "modernc.org/sqlite"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	reader_v2 "github.com/conductorone/baton-sdk/pb/c1/reader/v2"
 	"github.com/conductorone/baton-sdk/pkg/connectorstore"
+	"github.com/conductorone/baton-sdk/pkg/uotel"
 )
+
+var ErrDbNotOpen = errors.New("c1file: database has not been opened")
 
 type pragma struct {
 	name  string
@@ -62,10 +67,18 @@ type C1File struct {
 	slowQueryLogFrequency time.Duration
 
 	// Sync cleanup settings
-	syncLimit int
+	syncLimit   int
+	skipCleanup bool
 }
 
-var _ connectorstore.Writer = (*C1File)(nil)
+// *C1File satisfies connectorstore.Writer (the connector-facing contract),
+// connectorstore.LatestFinishedSyncIDFetcher (narrow optional capability
+// added in PR #774), and dotc1z.C1ZStore (the internal sync-pipeline
+// contract asserted in c1file_store.go alongside the sub-store assertions).
+var (
+	_ connectorstore.Writer                      = (*C1File)(nil)
+	_ connectorstore.LatestFinishedSyncIDFetcher = (*C1File)(nil)
+)
 
 type C1FOption func(*C1File)
 
@@ -96,6 +109,13 @@ func WithC1FEncoderConcurrency(concurrency int) C1FOption {
 	}
 }
 
+// WithC1FSkipCleanup skips cleanup of old syncs when set to true.
+func WithC1FSkipCleanup(skip bool) C1FOption {
+	return func(o *C1File) {
+		o.skipCleanup = skip
+	}
+}
+
 // WithC1FSyncCountLimit sets the number of syncs to keep during cleanup.
 // If not set, defaults to 2 (or BATON_KEEP_SYNC_COUNT env var if set).
 func WithC1FSyncCountLimit(limit int) C1FOption {
@@ -107,12 +127,23 @@ func WithC1FSyncCountLimit(limit int) C1FOption {
 // Returns a C1File instance for the given db filepath.
 func NewC1File(ctx context.Context, dbFilePath string, opts ...C1FOption) (*C1File, error) {
 	ctx, span := tracer.Start(ctx, "NewC1File")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
 	rawDB, err := sql.Open("sqlite", dbFilePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new-c1-file: error opening raw db: %w", err)
 	}
+	l := ctxzap.Extract(ctx)
+	l.Debug("new-c1-file: opened raw db",
+		zap.String("db_file_path", dbFilePath),
+	)
+
+	// Limit to a single connection so idle pool connections don't hold WAL
+	// read locks that prevent PRAGMA wal_checkpoint(TRUNCATE) from completing
+	// all frames. Without this, saveC1z() can read an incomplete main db file
+	// because uncheckpointed WAL frames are invisible to raw file I/O.
+	rawDB.SetMaxOpenConns(1)
 
 	db := goqu.New("sqlite3", rawDB)
 
@@ -138,7 +169,7 @@ func NewC1File(ctx context.Context, dbFilePath string, opts ...C1FOption) (*C1Fi
 
 	err = c1File.init(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new-c1-file: error initializing c1file: %w", err)
 	}
 
 	return c1File, nil
@@ -151,6 +182,7 @@ type c1zOptions struct {
 	readOnly           bool
 	encoderConcurrency int
 	syncLimit          int
+	skipCleanup        bool
 }
 
 type C1ZOption func(*c1zOptions)
@@ -192,6 +224,13 @@ func WithEncoderConcurrency(concurrency int) C1ZOption {
 	}
 }
 
+// WithSkipCleanup skips cleanup of old syncs when set to true.
+func WithSkipCleanup(skip bool) C1ZOption {
+	return func(o *c1zOptions) {
+		o.skipCleanup = skip
+	}
+}
+
 // WithSyncLimit sets the number of syncs to keep during cleanup.
 // If not set, defaults to 2 (or BATON_KEEP_SYNC_COUNT env var if set).
 func WithSyncLimit(limit int) C1ZOption {
@@ -203,7 +242,8 @@ func WithSyncLimit(limit int) C1ZOption {
 // Returns a new C1File instance with its state stored at the provided filename.
 func NewC1ZFile(ctx context.Context, outputFilePath string, opts ...C1ZOption) (*C1File, error) {
 	ctx, span := tracer.Start(ctx, "NewC1ZFile")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
 	options := &c1zOptions{
 		encoderConcurrency: 1,
@@ -211,30 +251,41 @@ func NewC1ZFile(ctx context.Context, outputFilePath string, opts ...C1ZOption) (
 	for _, opt := range opts {
 		opt(options)
 	}
+	if options.encoderConcurrency < 0 {
+		return nil, fmt.Errorf("encoder concurrency must not be negative: %d", options.encoderConcurrency)
+	}
 
 	dbFilePath, _, err := decompressC1z(outputFilePath, options.tmpDir, options.decoderOptions...)
 	if err != nil {
 		return nil, err
 	}
+	l := ctxzap.Extract(ctx)
+	l.Debug("new-c1z-file: decompressed c1z",
+		zap.String("db_file_path", dbFilePath),
+		zap.String("output_file_path", outputFilePath),
+	)
 
 	var c1fopts []C1FOption
+	if options.tmpDir != "" {
+		c1fopts = append(c1fopts, WithC1FTmpDir(options.tmpDir))
+	}
 	for _, pragma := range options.pragmas {
 		c1fopts = append(c1fopts, WithC1FPragma(pragma.name, pragma.value))
 	}
 	if options.readOnly {
 		c1fopts = append(c1fopts, WithC1FReadOnly(true))
 	}
-	if options.encoderConcurrency < 0 {
-		return nil, fmt.Errorf("encoder concurrency must be greater than 0")
-	}
 	c1fopts = append(c1fopts, WithC1FEncoderConcurrency(options.encoderConcurrency))
 	if options.syncLimit > 0 {
 		c1fopts = append(c1fopts, WithC1FSyncCountLimit(options.syncLimit))
 	}
+	if options.skipCleanup {
+		c1fopts = append(c1fopts, WithC1FSkipCleanup(true))
+	}
 
 	c1File, err := NewC1File(ctx, dbFilePath, c1fopts...)
 	if err != nil {
-		return nil, err
+		return nil, cleanupDbDir(dbFilePath, err)
 	}
 
 	c1File.outputFilePath = outputFilePath
@@ -243,6 +294,20 @@ func NewC1ZFile(ctx context.Context, outputFilePath string, opts ...C1ZOption) (
 }
 
 func cleanupDbDir(dbFilePath string, err error) error {
+	// Stat dbFilePath to make sure it's a file, not a directory.
+	stat, statErr := os.Stat(dbFilePath)
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			// If the file doesn't exist, we can't clean up the directory.
+			return err
+		}
+		return errors.Join(err, fmt.Errorf("cleanupDbDir: error statting dbFilePath %s: %w", dbFilePath, statErr))
+	}
+	if stat.IsDir() {
+		// If the file is a directory, don't try to clean up the parent directory.
+		return errors.Join(err, fmt.Errorf("cleanupDbDir: dbFilePath %s is a directory, not a file: %w", dbFilePath, statErr))
+	}
+
 	cleanupErr := os.RemoveAll(filepath.Dir(dbFilePath))
 	if cleanupErr != nil {
 		err = errors.Join(err, cleanupErr)
@@ -252,16 +317,20 @@ func cleanupDbDir(dbFilePath string, err error) error {
 
 var ErrReadOnly = errors.New("c1z: read only mode")
 
+const defaultCheckpointTimeout = 120
+
+var checkpointTimeout, _ = strconv.ParseInt(os.Getenv("BATON_WAL_CHECKPOINT_TIMEOUT"), 10, 64)
+
 // Close ensures that the sqlite database is flushed to disk, and if any changes were made we update the original database
 // with our changes. The provided context is used for the WAL checkpoint operation. If the context is already expired,
-// a fresh context with a 30-second timeout is used to ensure the checkpoint completes.
+// a fresh context with a timeout is used to ensure the checkpoint completes.
 func (c *C1File) Close(ctx context.Context) error {
 	var err error
+	l := ctxzap.Extract(ctx)
 
 	c.closedMu.Lock()
 	defer c.closedMu.Unlock()
 	if c.closed {
-		l := ctxzap.Extract(ctx)
 		l.Warn("close called on already-closed c1file", zap.String("db_path", c.dbFilePath))
 		return nil
 	}
@@ -284,22 +353,44 @@ func (c *C1File) Close(ctx context.Context) error {
 			// saving a stale c1z.
 			checkpointCtx := ctx
 			if ctx.Err() != nil {
+				if checkpointTimeout <= 0 {
+					checkpointTimeout = defaultCheckpointTimeout
+				}
 				var checkpointCancel context.CancelFunc
-				checkpointCtx, checkpointCancel = context.WithTimeout(context.Background(), 30*time.Second)
+				checkpointCtx, checkpointCancel = context.WithTimeout(context.Background(), time.Duration(checkpointTimeout)*time.Second)
 				defer checkpointCancel()
 			}
-			_, err = c.rawDb.ExecContext(checkpointCtx, "PRAGMA wal_checkpoint(TRUNCATE)")
+
+			// Use QueryRowContext to read the (busy, log, checkpointed) result.
+			// ExecContext silently discards these values, making partial
+			// checkpoints undetectable — the PRAGMA returns nil error even when
+			// it can't checkpoint all frames due to concurrent readers.
+			busy, log, checkpointed, err := c.truncateWAL(checkpointCtx)
 			if err != nil {
-				l := ctxzap.Extract(ctx)
-				// Checkpoint failed - log and continue. The subsequent Close()
-				// will attempt a passive checkpoint. If that also fails, we'll
-				// get an error from Close() or saveC1z() will read stale data.
-				// We log here for debugging but don't fail because:
-				// 1. Close() will still attempt its own checkpoint
-				// 2. The error might be transient (busy)
-				l.Warn("WAL checkpoint failed before close",
+				l.Error("WAL checkpoint failed before close",
 					zap.Error(err),
 					zap.String("db_path", c.dbFilePath))
+				closeErr := c.rawDb.Close()
+				if closeErr != nil {
+					l.Error("error closing raw db", zap.Error(closeErr))
+				}
+				c.rawDb = nil
+				c.db = nil
+				return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL checkpoint failed: %w", err))
+			}
+			if busy != 0 || (log >= 0 && checkpointed < log) {
+				l.Error("WAL checkpoint incomplete before close",
+					zap.Int("busy", busy),
+					zap.Int("log", log),
+					zap.Int("checkpointed", checkpointed),
+					zap.String("db_path", c.dbFilePath))
+				closeErr := c.rawDb.Close()
+				if closeErr != nil {
+					l.Error("error closing raw db", zap.Error(closeErr))
+				}
+				c.rawDb = nil
+				c.db = nil
+				return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL checkpoint incomplete: busy=%d log=%d checkpointed=%d", busy, log, checkpointed))
 			}
 		}
 
@@ -316,6 +407,15 @@ func (c *C1File) Close(ctx context.Context) error {
 		if c.readOnly {
 			return cleanupDbDir(c.dbFilePath, ErrReadOnly)
 		}
+
+		// Verify WAL was fully checkpointed. If it still has data,
+		// saveC1z would create a c1z missing the WAL contents since
+		// it only reads the main database file.
+		walPath := c.dbFilePath + "-wal"
+		if walInfo, statErr := os.Stat(walPath); statErr == nil && walInfo.Size() > 0 {
+			return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL file not empty after close (size=%d) - refusing to save incomplete data", walInfo.Size()))
+		}
+
 		err = saveC1z(c.dbFilePath, c.outputFilePath, c.encoderConcurrency)
 		if err != nil {
 			return cleanupDbDir(c.dbFilePath, err)
@@ -331,20 +431,70 @@ func (c *C1File) Close(ctx context.Context) error {
 	return nil
 }
 
+// truncateWAL truncates the WAL file.
+// Returns the busy, log, and checkpointed values.
+func (c *C1File) truncateWAL(ctx context.Context) (int, int, int, error) {
+	ctx, span := tracer.Start(ctx, "C1File.truncateWAL")
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
+
+	// Use QueryRowContext to read the (busy, log, checkpointed) result.
+	// ExecContext silently discards these values, making partial
+	// checkpoints undetectable — the PRAGMA returns nil error even when
+	// it can't checkpoint all frames due to concurrent readers.
+	var busy, log, checkpointed int
+	row := c.rawDb.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
+	if err := row.Scan(&busy, &log, &checkpointed); err != nil {
+		return 0, 0, 0, err
+	}
+	// TODO: Return an error here?
+	if busy != 0 || (log >= 0 && checkpointed < log) {
+		ctxzap.Extract(ctx).Info("WAL checkpoint incomplete",
+			zap.Int("busy", busy),
+			zap.Int("log", log),
+			zap.Int("checkpointed", checkpointed),
+			zap.String("db_path", c.dbFilePath))
+	}
+	return busy, log, checkpointed, nil
+}
+
 // init ensures that the database has all of the required schema.
 func (c *C1File) init(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "C1File.init")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
-	err := c.validateDb(ctx)
+	l := ctxzap.Extract(ctx)
+
+	err = c.validateDb(ctx)
 	if err != nil {
 		return err
 	}
 
 	err = c.InitTables(ctx)
 	if err != nil {
+		l.Error("c1file-init: error initializing tables", zap.Error(err))
 		return err
 	}
+	l.Debug("c1file-init: initialized tables",
+		zap.String("db_file_path", c.dbFilePath),
+	)
+
+	// // Checkpoint the WAL after migrations. Migrations like backfillGrantExpansionColumn
+	// // can update many rows, filling the WAL. Without a checkpoint, subsequent reads are
+	// // slow because SQLite must scan the WAL hash table for every page read.
+	if _, err = c.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		l.Warn("c1file-init: WAL checkpoint after init failed", zap.Error(err))
+	}
+
+	// Optimize DB. Desired after running migrations to improve performance.
+	_, err = c.db.ExecContext(ctx, "PRAGMA optimize")
+	if err != nil {
+		return err
+	}
+	l.Debug("c1file-init: optimized database",
+		zap.String("db_file_path", c.dbFilePath),
+	)
 
 	if c.readOnly {
 		// Disable journaling in read only mode, since we're not writing to the database.
@@ -357,12 +507,42 @@ func (c *C1File) init(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		// Use NORMAL synchronous mode instead of FULL (default).
+		// Normal is faster and only unsafe on old filesystems.
+		_, err = c.db.ExecContext(ctx, "PRAGMA synchronous = NORMAL")
+		if err != nil {
+			return err
+		}
+
+		// Use TRUNCATE journal mode instead of DELETE (default).
+		// User-specified pragmas such as journal_mode=WAL will override this.
+		_, err = c.db.ExecContext(ctx, "PRAGMA journal_mode = TRUNCATE")
+		if err != nil {
+			return err
+		}
+	}
+
+	hasLockingPragma := false
+	for _, pragma := range c.pragmas {
+		pragmaName := strings.ToLower(pragma.name)
+		if pragmaName == "main.locking_mode" || pragmaName == "locking_mode" {
+			hasLockingPragma = true
+			break
+		}
+	}
+	if !hasLockingPragma {
+		l.Debug("c1file-init: setting locking mode to EXCLUSIVE", zap.String("db_file_path", c.dbFilePath))
+		_, err = c.db.ExecContext(ctx, "PRAGMA main.locking_mode = EXCLUSIVE")
+		if err != nil {
+			return fmt.Errorf("c1file-init: error setting locking mode to EXCLUSIVE: %w", err)
+		}
 	}
 
 	for _, pragma := range c.pragmas {
 		_, err := c.db.ExecContext(ctx, fmt.Sprintf("PRAGMA %s = %s", pragma.name, pragma.value))
 		if err != nil {
-			return err
+			return fmt.Errorf("c1file-init: error setting pragma %s = %s: %w", pragma.name, pragma.value, err)
 		}
 	}
 
@@ -371,22 +551,26 @@ func (c *C1File) init(ctx context.Context) error {
 
 func (c *C1File) InitTables(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "C1File.InitTables")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
-	err := c.validateDb(ctx)
+	err = c.validateDb(ctx)
 	if err != nil {
 		return err
 	}
 
+	l := ctxzap.Extract(ctx).With(zap.String("db_file_path", c.dbFilePath))
 	for _, t := range allTableDescriptors {
 		query, args := t.Schema()
 		_, err = c.db.ExecContext(ctx, fmt.Sprintf(query, args...))
 		if err != nil {
-			return err
+			l.Error("c1file-init-tables: error initializing table schema", zap.Error(err), zap.String("table_name", t.Name()))
+			return fmt.Errorf("c1file-init-tables: error initializing table %s: %w", t.Name(), err)
 		}
 		err = t.Migrations(ctx, c.db)
 		if err != nil {
-			return err
+			l.Error("c1file-init-tables: error running migration", zap.Error(err), zap.String("table_name", t.Name()))
+			return fmt.Errorf("c1file-init-tables: error running migration for table %s: %w", t.Name(), err)
 		}
 	}
 
@@ -397,11 +581,11 @@ func (c *C1File) InitTables(ctx context.Context) error {
 // If syncId is empty, it will use the latest sync run of the given type.
 func (c *C1File) Stats(ctx context.Context, syncType connectorstore.SyncType, syncId string) (map[string]int64, error) {
 	ctx, span := tracer.Start(ctx, "C1File.Stats")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
 	counts := make(map[string]int64)
 
-	var err error
 	if syncId == "" {
 		syncId, err = c.LatestSyncID(ctx, syncType)
 		if err != nil {
@@ -440,15 +624,26 @@ func (c *C1File) Stats(ctx context.Context, syncType connectorstore.SyncType, sy
 		pageToken = resp.GetNextPageToken()
 	}
 	counts["resource_types"] = int64(len(rtStats))
+
+	// Pre-populate every known resource type with 0 so the result map
+	// always carries an entry per resource type, even if the sync has no
+	// rows of that type. The GROUP BY below only emits resource_type_ids
+	// that have at least one row.
 	for _, rt := range rtStats {
-		resourceCount, err := c.db.From(resources.Name()).
-			Where(goqu.C("resource_type_id").Eq(rt.GetId())).
-			Where(goqu.C("sync_id").Eq(syncId)).
-			CountContext(ctx)
-		if err != nil {
-			return nil, err
+		counts[rt.GetId()] = 0
+	}
+	resourceCounts, err := c.countBySyncAndResourceType(ctx, resources.Name(), syncId)
+	if err != nil {
+		return nil, err
+	}
+	for rtID, n := range resourceCounts {
+		// Only surface counts for resource types in the catalog —
+		// matches the prior per-type loop, which only wrote keys it
+		// iterated over. Stray resource_type_ids in the table (which
+		// shouldn't normally exist) are intentionally ignored here.
+		if _, known := counts[rtID]; known {
+			counts[rtID] = n
 		}
-		counts[rt.GetId()] = resourceCount
 	}
 
 	if syncType != connectorstore.SyncTypeResourcesOnly {
@@ -472,10 +667,59 @@ func (c *C1File) Stats(ctx context.Context, syncType connectorstore.SyncType, sy
 	return counts, nil
 }
 
+// countBySyncAndResourceType issues a single GROUP BY query that returns
+// per-resource-type row counts for a sync. It replaces what used to be
+// a per-resource-type loop of N COUNT(*) queries.
+//
+// We chose this over adding a (sync_id, resource_type_id) covering index
+// because grants tables can hold tens of millions of rows and the index
+// maintenance cost on every grant insert isn't worth a stats-call
+// speedup that's a small fraction of overall sync runtime. The single
+// GROUP BY collapses N round-trips through goqu/sql/driver into one
+// without changing the schema or insert hot path.
+//
+// The returned map only contains entries for resource_type_ids that
+// actually appear in the table. Callers that want zero-rows for missing
+// types must pre-populate them; this keeps the helper simple and
+// independent of the resource-type catalog.
+func (c *C1File) countBySyncAndResourceType(
+	ctx context.Context, tableName string, syncID string,
+) (map[string]int64, error) {
+	q := c.db.From(tableName).
+		Where(goqu.C("sync_id").Eq(syncID)).
+		Select(goqu.C("resource_type_id"), goqu.COUNT("*")).
+		GroupBy(goqu.C("resource_type_id"))
+
+	query, args, err := q.ToSQL()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var rtID string
+		var n int64
+		if err := rows.Scan(&rtID, &n); err != nil {
+			return nil, err
+		}
+		out[rtID] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // validateDb ensures that the database has been opened.
 func (c *C1File) validateDb(ctx context.Context) error {
 	if c.db == nil {
-		return fmt.Errorf("c1file: datbase has not been opened")
+		return ErrDbNotOpen
 	}
 
 	return nil
@@ -496,6 +740,50 @@ func (c *C1File) OutputFilepath() (string, error) {
 	}
 	return c.outputFilePath, nil
 }
+
+// CurrentDBSizeBytes returns the current total on-disk size of the underlying
+// uncompressed sqlite database, including the write-ahead log if present.
+// Used by operational tooling (e.g. the grant-expansion progress logger) to
+// observe c1z growth during long in-process writes without waiting for
+// saveC1z to land a new frame.
+//
+// The WAL file holds writes that have not yet been checkpointed into the main
+// database file; with journal_mode=WAL the main file may stay stable for long
+// stretches while the WAL grows into the hundreds of MB. Summing both gives a
+// representative "bytes written so far" figure during active expansion.
+//
+// This is the *uncompressed* size. The post-saveC1z c1z file size (compressed)
+// is smaller; for that, see the `c1z: saved` log line emitted by saveC1z.
+func (c *C1File) CurrentDBSizeBytes() (int64, error) {
+	if c.dbFilePath == "" {
+		return 0, fmt.Errorf("c1file: db file path is empty")
+	}
+	fi, err := os.Stat(c.dbFilePath)
+	if err != nil {
+		return 0, err
+	}
+	total := fi.Size()
+	// Add the WAL sidecar if it exists. `os.ErrNotExist` is expected (no WAL
+	// or journal_mode != WAL). Any *other* error — permission, EIO, stale
+	// handle, etc. — we surface: a silently-underreported WAL would defeat
+	// the growth-visibility purpose of this method (could hide hundreds of
+	// MB of pending writes).
+	switch wal, err := os.Stat(c.dbFilePath + "-wal"); {
+	case err == nil:
+		total += wal.Size()
+	case errors.Is(err, os.ErrNotExist):
+		// no WAL — fine.
+	default:
+		return 0, fmt.Errorf("c1file: stat wal sidecar: %w", err)
+	}
+	return total, nil
+}
+
+// Compile-time assertion that *C1File satisfies the DBSizeProvider capability
+// that ProgressLog.LogExpandProgress type-asserts against. Catches signature
+// drift (e.g. if someone adds a ctx parameter to CurrentDBSizeBytes) at
+// compile time instead of silently turning off the expand-log size fields.
+var _ connectorstore.DBSizeProvider = (*C1File)(nil)
 
 func (c *C1File) AttachFile(other *C1File, dbName string) (*C1FileAttached, error) {
 	_, err := c.db.Exec(`ATTACH DATABASE ? AS ?`, other.dbFilePath, dbName)
@@ -525,9 +813,9 @@ func (c *C1FileAttached) DetachFile(dbName string) (*C1FileAttached, error) {
 // If syncId is empty, it will use the latest sync run of the given type.
 func (c *C1File) GrantStats(ctx context.Context, syncType connectorstore.SyncType, syncId string) (map[string]int64, error) {
 	ctx, span := tracer.Start(ctx, "C1File.GrantStats")
-	defer span.End()
-
 	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
+
 	if syncId == "" {
 		syncId, err = c.LatestSyncID(ctx, syncType)
 		if err != nil {
@@ -563,18 +851,25 @@ func (c *C1File) GrantStats(ctx context.Context, syncType connectorstore.SyncTyp
 		pageToken = resp.GetNextPageToken()
 	}
 
-	stats := make(map[string]int64)
+	stats := make(map[string]int64, len(allResourceTypes))
+	// Pre-populate zero counts for every known resource type so the
+	// caller always sees one entry per resource type, even when no
+	// grants exist for it in this sync.
+	for _, rt := range allResourceTypes {
+		stats[rt.GetId()] = 0
+	}
 
-	for _, resourceType := range allResourceTypes {
-		grantsCount, err := c.db.From(grants.Name()).
-			Where(goqu.C("sync_id").Eq(syncId)).
-			Where(goqu.C("resource_type_id").Eq(resourceType.GetId())).
-			CountContext(ctx)
-		if err != nil {
-			return nil, err
+	grantCounts, err := c.countBySyncAndResourceType(ctx, grants.Name(), syncId)
+	if err != nil {
+		return nil, err
+	}
+	for rtID, n := range grantCounts {
+		// Match prior per-type loop: only surface resource types that
+		// exist in the catalog. Stray resource_type_ids in the grants
+		// table (which shouldn't normally exist) are ignored.
+		if _, known := stats[rtID]; known {
+			stats[rtID] = n
 		}
-
-		stats[resourceType.GetId()] = grantsCount
 	}
 
 	return stats, nil

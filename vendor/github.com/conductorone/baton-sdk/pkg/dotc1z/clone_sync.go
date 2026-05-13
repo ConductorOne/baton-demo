@@ -2,46 +2,83 @@ package dotc1z
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/connectorstore"
+	"github.com/conductorone/baton-sdk/pkg/uotel"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
-func cloneTableQuery(tableName string) (string, error) {
-	var sb strings.Builder
-	var err error
+var validColumnNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-	_, err = sb.WriteString("INSERT INTO clone.")
-	if err != nil {
-		return "", err
+// validateColumnName rejects column names that contain anything other than
+// ASCII letters, digits, and underscores.  This prevents SQL injection via
+// malicious column names embedded in a crafted .c1z database.
+func validateColumnName(name string) error {
+	if !validColumnNameRe.MatchString(name) {
+		return fmt.Errorf("invalid column name: %q", name)
 	}
+	return nil
+}
 
-	_, err = sb.WriteString(tableName)
+// quoteIdentifier wraps a SQLite identifier in double-quotes, escaping any
+// embedded double-quote characters by doubling them per the SQL standard.
+func quoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// cloneTableColumns returns the non-autoincrement column names for tableName
+// by querying PRAGMA table_info on the given connection. The column names are
+// returned in schema-definition order for the source table, which may differ
+// from a freshly-created table when columns were added via ALTER TABLE.
+func cloneTableColumns(ctx context.Context, conn *sql.Conn, tableName string) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	defer rows.Close()
 
-	_, err = sb.WriteString(" SELECT * FROM ")
-	if err != nil {
-		return "", err
+	var columns []string
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, pk int
+		var defaultValue any
+
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
+			return nil, err
+		}
+		if name != "id" {
+			if err := validateColumnName(name); err != nil {
+				return nil, err
+			}
+			columns = append(columns, name)
+		}
 	}
+	return columns, rows.Err()
+}
 
-	_, err = sb.WriteString(tableName)
-	if err != nil {
-		return "", err
+// cloneTableQuery builds an INSERT ... SELECT that copies rows by explicit
+// column name rather than relying on SELECT *, which is sensitive to the
+// physical column order of the source vs destination tables.
+func cloneTableQuery(tableName string, columns []string) string {
+	quoted := make([]string, len(columns))
+	for i, c := range columns {
+		quoted[i] = quoteIdentifier(c)
 	}
-
-	_, err = sb.WriteString(" WHERE sync_id=?")
-	if err != nil {
-		return "", err
-	}
-
-	return sb.String(), nil
+	colList := strings.Join(quoted, ", ")
+	return fmt.Sprintf(
+		"INSERT INTO clone.%s (%s) SELECT %s FROM %s WHERE sync_id=?",
+		tableName, colList, colList, tableName,
+	)
 }
 
 // CloneSync uses sqlite hackery to directly copy the pertinent rows into a new database.
@@ -50,9 +87,10 @@ func cloneTableQuery(tableName string) (string, error) {
 // 3. Execute an ATTACH query to bring our empty sqlite db into the context of our db connection
 // 4. Select directly from the cloned db and insert directly into the new database.
 // 5. Close and save the new database as a c1z at the configured path.
-func (c *C1File) CloneSync(ctx context.Context, outPath string, syncID string) (err error) {
+func (c *C1File) CloneSync(ctx context.Context, outPath string, syncID string) error {
 	ctx, span := tracer.Start(ctx, "C1File.CloneSync")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
 	// Be sure that the output path is empty else return an error
 	_, err = os.Stat(outPath)
@@ -74,16 +112,21 @@ func (c *C1File) CloneSync(ctx context.Context, outPath string, syncID string) (
 	}()
 
 	dbPath := filepath.Join(tmpDir, "db")
-	out, err := NewC1File(ctx, dbPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close(ctx)
 
-	err = out.init(ctx)
+	// Create a temporary C1File to initialize the schema in the new db.
+	// NewC1File calls init() internally, creating all required tables.
+	// We close only the rawDb to release the connection and file locks
+	// without triggering C1File.Close()'s cleanupDbDir which would
+	// remove the tmpDir we still need.
+	initFile, err := NewC1File(ctx, dbPath)
 	if err != nil {
 		return err
 	}
+	if err = initFile.rawDb.Close(); err != nil {
+		return err
+	}
+	initFile.rawDb = nil
+	initFile.db = nil
 
 	if syncID == "" {
 		syncID, err = c.LatestSyncID(ctx, connectorstore.SyncTypeFull)
@@ -121,21 +164,29 @@ func (c *C1File) CloneSync(ctx context.Context, outPath string, syncID string) (
 	}
 
 	for _, t := range allTableDescriptors {
-		q, err := cloneTableQuery(t.Name())
+		columns, err := cloneTableColumns(qCtx, conn, t.Name())
 		if err != nil {
-			return err
+			return fmt.Errorf("clone-sync: error reading columns for %s: %w", t.Name(), err)
 		}
+		q := cloneTableQuery(t.Name(), columns)
 		_, err = conn.ExecContext(qCtx, q, syncID)
 		if err != nil {
 			return err
 		}
 	}
 
-	// Really be sure that our connection is closed and the db won't be mutated
+	// Detach the clone database before releasing the connection. On Windows,
+	// open file handles prevent deletion; without DETACH the source connection
+	// pool retains a handle on the clone db file, causing os.RemoveAll to fail.
+	_, err = conn.ExecContext(qCtx, "DETACH clone")
+	if err != nil {
+		ctxzap.Extract(ctx).Error("error detaching clone database", zap.Error(err))
+	}
 	canc()
 	_ = conn.Close()
 
-	// Hack to wrap the db in a tempdir in a C1Z
+	// Open a fresh C1File to compress the populated db into a c1z.
+	// No other connections are open on dbPath at this point.
 	outFile, err := NewC1File(ctx, dbPath)
 	if err != nil {
 		return err

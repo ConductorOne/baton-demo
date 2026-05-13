@@ -24,11 +24,17 @@ var maxDepth, _ = strconv.ParseInt(os.Getenv("BATON_GRAPH_EXPAND_MAX_DEPTH"), 10
 var ErrMaxDepthExceeded = errors.New("max depth exceeded")
 
 // ExpanderStore defines the minimal store interface needed for grant expansion.
-// This interface can be implemented by the connectorstore or by a mock for testing.
+// Implementations:
+//   - *dotc1z.C1File (via dotc1z.C1ZStore) for production syncs
+//   - mocks for unit tests
+//
+// StoreExpandedGrants writes a batch of expanded grants back to storage,
+// preserving existing expansion metadata columns on the underlying rows.
+// See dotc1z.GrantStore.StoreExpandedGrants for the full contract.
 type ExpanderStore interface {
 	GetEntitlement(ctx context.Context, req *reader_v2.EntitlementsReaderServiceGetEntitlementRequest) (*reader_v2.EntitlementsReaderServiceGetEntitlementResponse, error)
 	ListGrantsForEntitlement(ctx context.Context, req *reader_v2.GrantsReaderServiceListGrantsForEntitlementRequest) (*reader_v2.GrantsReaderServiceListGrantsForEntitlementResponse, error)
-	PutGrants(ctx context.Context, grants ...*v2.Grant) error
+	StoreExpandedGrants(ctx context.Context, grants ...*v2.Grant) error
 }
 
 // Expander handles the grant expansion algorithm.
@@ -193,6 +199,11 @@ func (e *Expander) runAction(ctx context.Context, action *EntitlementGraphAction
 			}
 		}
 
+		// Determine if the source grant is direct: either it has no sources (never expanded),
+		// or it has a self-reference (direct grant that was also expanded).
+		sgSources := sourceGrant.GetSources().GetSources()
+		isSourceDirect := len(sgSources) == 0 || sgSources[action.SourceEntitlementID] != nil
+
 		// Unroll all grants for the principal on the descendant entitlement.
 		pageToken := ""
 		for {
@@ -212,7 +223,7 @@ func (e *Expander) runAction(ctx context.Context, action *EntitlementGraphAction
 
 			// If we have no grants for the principal in the descendant entitlement, make one.
 			if pageToken == "" && resp.GetNextPageToken() == "" && len(descendantGrants) == 0 {
-				descendantGrant, err := newExpandedGrant(descendantEntitlement.GetEntitlement(), sourceGrant.GetPrincipal(), action.SourceEntitlementID)
+				descendantGrant, err := newExpandedGrant(descendantEntitlement.GetEntitlement(), sourceGrant.GetPrincipal(), action.SourceEntitlementID, isSourceDirect)
 				if err != nil {
 					l.Error("runAction: error creating new grant", zap.Error(err))
 					return "", fmt.Errorf("runAction: error creating new grant: %w", err)
@@ -238,12 +249,12 @@ func (e *Expander) runAction(ctx context.Context, action *EntitlementGraphAction
 
 				if len(sourcesMap) == 0 {
 					// If we are already granted this entitlement, make sure to add ourselves as a source.
-					sourcesMap[action.DescendantEntitlementID] = &v2.GrantSources_GrantSource{}
+					sourcesMap[action.DescendantEntitlementID] = &v2.GrantSources_GrantSource{IsDirect: true}
 					updated = true
 				}
 				// Include the source grant as a source.
 				if sourcesMap[action.SourceEntitlementID] == nil {
-					sourcesMap[action.SourceEntitlementID] = &v2.GrantSources_GrantSource{}
+					sourcesMap[action.SourceEntitlementID] = &v2.GrantSources_GrantSource{IsDirect: isSourceDirect}
 					updated = true
 				}
 
@@ -284,7 +295,7 @@ func PutGrantsInChunks(ctx context.Context, store ExpanderStore, grants []*v2.Gr
 		return grants, nil
 	}
 
-	err := store.PutGrants(ctx, grants...)
+	err := store.StoreExpandedGrants(ctx, grants...)
 	if err != nil {
 		return nil, fmt.Errorf("PutGrantsInChunks: error putting grants: %w", err)
 	}
@@ -293,7 +304,7 @@ func PutGrantsInChunks(ctx context.Context, store ExpanderStore, grants []*v2.Gr
 }
 
 // newExpandedGrant creates a new grant for a principal on a descendant entitlement.
-func newExpandedGrant(descEntitlement *v2.Entitlement, principal *v2.Resource, sourceEntitlementID string) (*v2.Grant, error) {
+func newExpandedGrant(descEntitlement *v2.Entitlement, principal *v2.Resource, sourceEntitlementID string, isSourceDirect bool) (*v2.Grant, error) {
 	enResource := descEntitlement.GetResource()
 	if enResource == nil {
 		return nil, fmt.Errorf("newExpandedGrant: entitlement has no resource")
@@ -311,7 +322,7 @@ func newExpandedGrant(descEntitlement *v2.Entitlement, principal *v2.Resource, s
 	if sourceEntitlementID != "" {
 		sources = &v2.GrantSources{
 			Sources: map[string]*v2.GrantSources_GrantSource{
-				sourceEntitlementID: {},
+				sourceEntitlementID: {IsDirect: isSourceDirect},
 			},
 		}
 	}
