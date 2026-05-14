@@ -3,12 +3,15 @@ package dotc1z
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/doug-martin/goqu/v9"
+	"google.golang.org/protobuf/proto"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	reader_v2 "github.com/conductorone/baton-sdk/pb/c1/reader/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/uotel"
 )
 
 const grantsTableVersion = "1"
@@ -22,6 +25,8 @@ create table if not exists %s (
     principal_resource_type_id text not null,
     principal_resource_id text not null,
     external_id text not null,
+    expansion blob,                             -- Serialized GrantExpandable proto; NULL if grant is not expandable.
+    needs_expansion integer not null default 0, -- 1 if grant should be processed during expansion.
     data blob not null,
     sync_id text not null,
     discovered_at datetime not null
@@ -59,13 +64,55 @@ func (r *grantsTable) Schema() (string, []any) {
 	}
 }
 
+// isAlreadyExistsError returns true if err is a SQLite "duplicate column name" error.
+func isAlreadyExistsError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column name")
+}
+
 func (r *grantsTable) Migrations(ctx context.Context, db *goqu.Database) error {
-	return nil
+	// Add expansion column if missing (for older files).
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"alter table %s add column expansion blob", r.Name(),
+	)); err != nil && !isAlreadyExistsError(err) {
+		return err
+	}
+
+	// Add needs_expansion column if missing.
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"alter table %s add column needs_expansion integer not null default 0", r.Name(),
+	)); err != nil && !isAlreadyExistsError(err) {
+		return err
+	}
+
+	// Create partial index for efficient queries on expandable grants.
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"create index if not exists %s on %s (sync_id) where expansion is not null",
+		fmt.Sprintf("idx_grants_sync_expansion_v%s", r.Version()),
+		r.Name(),
+	)); err != nil {
+		return err
+	}
+
+	// Create partial index for grants needing expansion processing.
+	// Using a partial index (WHERE needs_expansion = 1) avoids polluting the query planner
+	// for general grant queries — without this, SQLite may prefer this index over more
+	// selective compound indexes like (entitlement_id, principal_resource_type_id, principal_resource_id).
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"create index if not exists %s on %s (sync_id) where needs_expansion = 1",
+		fmt.Sprintf("idx_grants_sync_needs_expansion_v%s", r.Version()),
+		r.Name(),
+	)); err != nil {
+		return err
+	}
+
+	// Backfill expansion column from stored grant bytes.
+	return backfillGrantExpansionColumn(ctx, db, r.Name())
 }
 
 func (c *C1File) ListGrants(ctx context.Context, request *v2.GrantsServiceListGrantsRequest) (*v2.GrantsServiceListGrantsResponse, error) {
 	ctx, span := tracer.Start(ctx, "C1File.ListGrants")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
 	ret, nextPageToken, err := listConnectorObjects(ctx, c, grants.Name(), request, func() *v2.Grant { return &v2.Grant{} })
 	if err != nil {
@@ -80,7 +127,8 @@ func (c *C1File) ListGrants(ctx context.Context, request *v2.GrantsServiceListGr
 
 func (c *C1File) GetGrant(ctx context.Context, request *reader_v2.GrantsReaderServiceGetGrantRequest) (*reader_v2.GrantsReaderServiceGetGrantResponse, error) {
 	ctx, span := tracer.Start(ctx, "C1File.GetGrant")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
 	ret := &v2.Grant{}
 	syncId, err := annotations.GetSyncIdFromAnnotations(request.GetAnnotations())
@@ -102,7 +150,8 @@ func (c *C1File) ListGrantsForEntitlement(
 	request *reader_v2.GrantsReaderServiceListGrantsForEntitlementRequest,
 ) (*reader_v2.GrantsReaderServiceListGrantsForEntitlementResponse, error) {
 	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForEntitlement")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 	ret, nextPageToken, err := listConnectorObjects(ctx, c, grants.Name(), request, func() *v2.Grant { return &v2.Grant{} })
 	if err != nil {
 		return nil, fmt.Errorf("error listing grants for entitlement '%s': %w", request.GetEntitlement().GetId(), err)
@@ -119,7 +168,8 @@ func (c *C1File) ListGrantsForPrincipal(
 	request *reader_v2.GrantsReaderServiceListGrantsForEntitlementRequest,
 ) (*reader_v2.GrantsReaderServiceListGrantsForEntitlementResponse, error) {
 	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForPrincipal")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
 	ret, nextPageToken, err := listConnectorObjects(ctx, c, grants.Name(), request, func() *v2.Grant { return &v2.Grant{} })
 	if err != nil {
@@ -137,7 +187,8 @@ func (c *C1File) ListGrantsForResourceType(
 	request *reader_v2.GrantsReaderServiceListGrantsForResourceTypeRequest,
 ) (*reader_v2.GrantsReaderServiceListGrantsForResourceTypeResponse, error) {
 	ctx, span := tracer.Start(ctx, "C1File.ListGrantsForResourceType")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
 	ret, nextPageToken, err := listConnectorObjects(ctx, c, grants.Name(), request, func() *v2.Grant { return &v2.Grant{} })
 	if err != nil {
@@ -150,51 +201,426 @@ func (c *C1File) ListGrantsForResourceType(
 	}.Build(), nil
 }
 
+// PutGrants is the connector-facing write method on connectorstore.Writer.
+// It replaces any conflicting row and re-extracts expansion metadata from
+// the grant payload.
 func (c *C1File) PutGrants(ctx context.Context, bulkGrants ...*v2.Grant) error {
 	ctx, span := tracer.Start(ctx, "C1File.PutGrants")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
-	return c.putGrantsInternal(ctx, bulkPutConnectorObject, bulkGrants...)
+	return c.upsertGrants(ctx, grantUpsertOptions{Mode: grantUpsertModeReplace}, bulkGrants...)
 }
 
+// PutGrantsIfNewer writes grants only when the provided discovered_at is
+// newer than the stored row's discovered_at. Retained on *C1File because
+// it has targeted test coverage in grants_test.go documenting its semantics.
+// Not on any interface.
 func (c *C1File) PutGrantsIfNewer(ctx context.Context, bulkGrants ...*v2.Grant) error {
 	ctx, span := tracer.Start(ctx, "C1File.PutGrantsIfNewer")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
-	return c.putGrantsInternal(ctx, bulkPutConnectorObjectIfNewer, bulkGrants...)
+	return c.upsertGrants(ctx, grantUpsertOptions{Mode: grantUpsertModeIfNewer}, bulkGrants...)
 }
 
-type grantPutFunc func(context.Context, *C1File, string, func(m *v2.Grant) (goqu.Record, error), ...*v2.Grant) error
-
-func (c *C1File) putGrantsInternal(ctx context.Context, f grantPutFunc, bulkGrants ...*v2.Grant) error {
+// upsertGrants is the internal implementation of grant writes with mode
+// dispatch. Exported-surface callers go through PutGrants (Replace),
+// PutGrantsIfNewer (IfNewer), or StoreExpandedGrants (PreserveExpansion).
+func (c *C1File) upsertGrants(ctx context.Context, opts grantUpsertOptions, bulkGrants ...*v2.Grant) error {
 	if c.readOnly {
 		return ErrReadOnly
 	}
+	switch opts.Mode {
+	case grantUpsertModeReplace,
+		grantUpsertModeIfNewer,
+		grantUpsertModePreserveExpansion:
+	default:
+		return fmt.Errorf("unknown grant upsert mode: %d", opts.Mode)
+	}
 
-	err := f(ctx, c, grants.Name(),
-		func(grant *v2.Grant) (goqu.Record, error) {
-			return goqu.Record{
-				"resource_type_id":           grant.GetEntitlement().GetResource().GetId().GetResourceType(),
-				"resource_id":                grant.GetEntitlement().GetResource().GetId().GetResource(),
-				"entitlement_id":             grant.GetEntitlement().GetId(),
-				"principal_resource_type_id": grant.GetPrincipal().GetId().GetResourceType(),
-				"principal_resource_id":      grant.GetPrincipal().GetId().GetResource(),
-			}, nil
-		},
-		bulkGrants...,
-	)
-	if err != nil {
+	if err := upsertGrantsInternal(ctx, c, opts.Mode, bulkGrants...); err != nil {
 		return err
 	}
+
 	c.dbUpdated = true
 	return nil
 }
 
+func baseGrantRecord(grant *v2.Grant) goqu.Record {
+	return goqu.Record{
+		"resource_type_id":           grant.GetEntitlement().GetResource().GetId().GetResourceType(),
+		"resource_id":                grant.GetEntitlement().GetResource().GetId().GetResource(),
+		"entitlement_id":             grant.GetEntitlement().GetId(),
+		"principal_resource_type_id": grant.GetPrincipal().GetId().GetResourceType(),
+		"principal_resource_id":      grant.GetPrincipal().GetId().GetResource(),
+	}
+}
+
+func grantExtractFields(mode grantUpsertMode) func(grant *v2.Grant) (goqu.Record, error) {
+	return func(grant *v2.Grant) (goqu.Record, error) {
+		rec := baseGrantRecord(grant)
+		if mode == grantUpsertModePreserveExpansion {
+			return rec, nil
+		}
+
+		if !hasGrantExpandable(grant) {
+			rec["expansion"] = nil
+			rec["needs_expansion"] = false
+			return rec, nil
+		}
+
+		stripped := proto.Clone(grant).(*v2.Grant)
+		expansionBytes, needsExpansion := extractAndStripExpansion(stripped)
+		// Use untyped nil for SQL NULL to avoid driver-specific []byte(nil)->X'' coercion.
+		if expansionBytes == nil {
+			rec["expansion"] = nil
+		} else {
+			rec["expansion"] = expansionBytes
+		}
+		rec["needs_expansion"] = needsExpansion
+
+		strippedData, err := protoMarshaler.Marshal(stripped)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling grant after stripping expansion: %w", err)
+		}
+		rec["data"] = strippedData
+		return rec, nil
+	}
+}
+
+func upsertGrantsInternal(
+	ctx context.Context,
+	c *C1File,
+	mode grantUpsertMode,
+	msgs ...*v2.Grant,
+) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	ctx, span := tracer.Start(ctx, "C1File.bulkUpsertGrants")
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
+
+	if err := c.validateSyncDb(ctx); err != nil {
+		return err
+	}
+
+	rows, err := prepareConnectorObjectRows(c, msgs, grantExtractFields(mode))
+	if err != nil {
+		return err
+	}
+
+	return executeGrantChunkedUpsert(ctx, c, rows, mode)
+}
+
+// hasGrantExpandable returns true if the grant has a GrantExpandable annotation.
+// This is a cheap check (no proto unmarshal) used to avoid cloning grants that
+// don't need annotation stripping.
+func hasGrantExpandable(grant *v2.Grant) bool {
+	expandable := &v2.GrantExpandable{}
+	for _, a := range grant.GetAnnotations() {
+		if a.MessageIs(expandable) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractAndStripExpansion extracts the GrantExpandable annotation from the grant,
+// removes it from the grant's annotations, and returns the serialized proto bytes.
+// The annotation is always stripped from the grant if present, so it never leaks
+// into the data blob. Returns (nil, false) if the grant has no GrantExpandable
+// annotation or if the annotation contains no valid entitlement IDs.
+func extractAndStripExpansion(grant *v2.Grant) ([]byte, bool) {
+	annos := annotations.Annotations(grant.GetAnnotations())
+	expandable := &v2.GrantExpandable{}
+	ok, err := annos.Pick(expandable)
+	if err != nil || !ok {
+		return nil, false
+	}
+
+	// Always strip the GrantExpandable annotation from the grant, regardless
+	// of whether it contains valid IDs. This keeps the data blob clean.
+	filtered := annotations.Annotations{}
+	for _, a := range annos {
+		if !a.MessageIs(expandable) {
+			filtered = append(filtered, a)
+		}
+	}
+	grant.SetAnnotations(filtered)
+
+	// Only return expansion bytes if there's at least one non-whitespace entitlement ID.
+	hasValid := false
+	for _, id := range expandable.GetEntitlementIds() {
+		if strings.TrimSpace(id) != "" {
+			hasValid = true
+			break
+		}
+	}
+	if !hasValid {
+		return nil, false
+	}
+
+	// Serialize the expandable annotation.
+	data, err := proto.Marshal(expandable)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+func backfillGrantExpansionColumn(ctx context.Context, db *goqu.Database, tableName string) error {
+	// Backfill grants only for syncs that have not yet been processed.
+	// The grants_backfilled flag is the single source of truth for whether
+	// this migration work still needs to run for a sync.
+	//
+	// We unmarshal every grant with expansion IS NULL from old syncs, extract the
+	// GrantExpandable annotation (if present), and populate the expansion column.
+	// Non-expandable grants get an empty-blob sentinel to avoid re-processing,
+	// which is cleaned up to NULL at the end.
+	//
+	// Uses cursor-based pagination (g.id > ?) so each query jumps to unprocessed
+	// rows via the primary key index instead of rescanning from the start.
+
+	// Collect un-backfilled sync IDs upfront. sync_runs is tiny, so this is
+	// cheap and lets us skip the grants scan entirely when there's nothing to do.
+	syncRows, err := db.QueryContext(ctx, fmt.Sprintf(
+		`SELECT sync_id FROM %s WHERE grants_backfilled = 0`, syncRuns.Name(),
+	))
+	if err != nil {
+		return err
+	}
+	var pendingSyncIDs []any
+	for syncRows.Next() {
+		var sid string
+		if err := syncRows.Scan(&sid); err != nil {
+			_ = syncRows.Close()
+			return err
+		}
+		pendingSyncIDs = append(pendingSyncIDs, sid)
+	}
+	if err := syncRows.Err(); err != nil {
+		_ = syncRows.Close()
+		return err
+	}
+	_ = syncRows.Close()
+
+	if len(pendingSyncIDs) == 0 {
+		return nil
+	}
+
+	placeholders := strings.Repeat("?,", len(pendingSyncIDs))
+	placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+
+	var lastID int64
+	for {
+		args := make([]any, 0, len(pendingSyncIDs)+1)
+		args = append(args, lastID)
+		args = append(args, pendingSyncIDs...)
+
+		rows, err := db.QueryContext(ctx, fmt.Sprintf(
+			`SELECT g.id, g.data FROM %s g
+			 WHERE g.id > ?
+			   AND g.expansion IS NULL
+			   AND g.sync_id IN (%s)
+			 ORDER BY g.id
+			 LIMIT 1000`,
+			tableName, placeholders,
+		), args...)
+		if err != nil {
+			return err
+		}
+
+		type row struct {
+			id   int64
+			data []byte
+		}
+		batch := make([]row, 0, 1000)
+		for rows.Next() {
+			var r row
+			if err := rows.Scan(&r.id, &r.data); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			batch = append(batch, r)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		_ = rows.Close()
+
+		if len(batch) == 0 {
+			break
+		}
+
+		lastID = batch[len(batch)-1].id
+
+		// Split grants into expandable (need full data rewrite) and
+		// non-expandable (just need sentinel marker).
+		var sentinelIDs []any
+		type expandableRow struct {
+			id             int64
+			expansionBytes []byte
+			needsExpansion bool
+			data           []byte
+		}
+		var expandableRows []expandableRow
+
+		for _, r := range batch {
+			g := &v2.Grant{}
+			if err := proto.Unmarshal(r.data, g); err != nil {
+				return err
+			}
+
+			expansionBytes, needsExpansion := extractAndStripExpansion(g)
+
+			if expansionBytes == nil {
+				sentinelIDs = append(sentinelIDs, r.id)
+				continue
+			}
+
+			newData, err := proto.Marshal(g)
+			if err != nil {
+				return err
+			}
+			expandableRows = append(expandableRows, expandableRow{
+				id:             r.id,
+				expansionBytes: expansionBytes,
+				needsExpansion: needsExpansion,
+				data:           newData,
+			})
+		}
+
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+
+		// Batch-mark non-expandable grants with the sentinel in one statement.
+		if len(sentinelIDs) > 0 {
+			sp := strings.Repeat("?,", len(sentinelIDs))
+			sp = sp[:len(sp)-1]
+			if _, err := tx.ExecContext(ctx, fmt.Sprintf(
+				`UPDATE %s SET expansion=X'' WHERE id IN (%s)`, tableName, sp,
+			), sentinelIDs...); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+		}
+
+		// Expandable grants need per-row updates (each has unique data).
+		if len(expandableRows) > 0 {
+			fullStmt, err := tx.PrepareContext(ctx, fmt.Sprintf(
+				`UPDATE %s SET expansion=?, needs_expansion=?, data=? WHERE id=?`, tableName,
+			))
+			if err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			for _, er := range expandableRows {
+				if _, err := fullStmt.ExecContext(ctx, er.expansionBytes, er.needsExpansion, er.data, er.id); err != nil {
+					_ = fullStmt.Close()
+					_ = tx.Rollback()
+					return err
+				}
+			}
+			_ = fullStmt.Close()
+		}
+
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	// Convert empty-blob sentinels back to NULL.
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(
+		`UPDATE %s SET expansion = NULL WHERE expansion = X''`, tableName,
+	)); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	// Mark all not-yet-processed syncs as backfilled so migration work only runs once.
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(
+		`UPDATE %s SET grants_backfilled = 1 WHERE grants_backfilled = 0`,
+		syncRuns.Name(),
+	)); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func executeGrantChunkedUpsert(
+	ctx context.Context, c *C1File,
+	rows []*goqu.Record,
+	mode grantUpsertMode,
+) error {
+	tableName := grants.Name()
+	// Expansion column update logic built conditionally in Go so the query planner
+	// sees simple expressions instead of parameterized CASE branches.
+	var expansionExpr goqu.Expression
+	var needsExpansionExpr goqu.Expression
+
+	switch mode {
+	case grantUpsertModePreserveExpansion:
+		// Keep existing expansion/needs_expansion values on conflict.
+		expansionExpr = goqu.L(fmt.Sprintf("%s.expansion", tableName))
+		needsExpansionExpr = goqu.L(fmt.Sprintf("%s.needs_expansion", tableName))
+	default:
+		// Write EXCLUDED expansion/needs_expansion values on conflict.
+		// This supports both setting and explicit clearing (expansion=NULL, needs_expansion=0).
+		expansionExpr = goqu.L("EXCLUDED.expansion")
+		needsExpansionExpr = goqu.L(
+			fmt.Sprintf(`CASE
+				WHEN EXCLUDED.expansion IS NULL OR EXCLUDED.expansion = X'' THEN 0
+				WHEN %[1]s.expansion IS NULL AND EXCLUDED.expansion IS NOT NULL THEN 1
+				WHEN %[1]s.expansion IS NOT NULL AND EXCLUDED.expansion IS NOT NULL AND %[1]s.expansion != EXCLUDED.expansion THEN 1
+				ELSE %[1]s.needs_expansion
+			END`, tableName),
+		)
+	}
+
+	buildQueryFn := func(insertDs *goqu.InsertDataset, chunkedRows []*goqu.Record) (*goqu.InsertDataset, error) {
+		update := goqu.Record{
+			"data":            goqu.I("EXCLUDED.data"),
+			"expansion":       expansionExpr,
+			"needs_expansion": needsExpansionExpr,
+		}
+		if mode == grantUpsertModeIfNewer {
+			update["discovered_at"] = goqu.I("EXCLUDED.discovered_at")
+			return insertDs.
+				OnConflict(goqu.DoUpdate("external_id, sync_id", update).Where(
+					goqu.L("EXCLUDED.discovered_at > ?.discovered_at", goqu.I(tableName)),
+				)).
+				Rows(chunkedRows).
+				Prepared(true), nil
+		}
+
+		return insertDs.
+			OnConflict(goqu.DoUpdate("external_id, sync_id", update)).
+			Rows(chunkedRows).
+			Prepared(true), nil
+	}
+
+	return executeChunkedInsert(ctx, c, tableName, rows, buildQueryFn)
+}
+
 func (c *C1File) DeleteGrant(ctx context.Context, grantId string) error {
 	ctx, span := tracer.Start(ctx, "C1File.DeleteGrant")
-	defer span.End()
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
 
-	err := c.validateSyncDb(ctx)
+	err = c.validateSyncDb(ctx)
 	if err != nil {
 		return err
 	}

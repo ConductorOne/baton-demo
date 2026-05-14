@@ -3,6 +3,8 @@ package connector
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
 	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
@@ -55,6 +57,28 @@ var helloIn1Minute = &v2.BatonActionSchema{
 			Name:        "hello",
 			DisplayName: "Hello",
 			Field:       &config.Field_StringField{},
+		},
+	},
+}
+
+var sleepForMilliseconds = &v2.BatonActionSchema{
+	Name:        "sleepForMilliseconds",
+	DisplayName: "Sleep for Milliseconds",
+	Description: "Wait for the requested number of milliseconds plus or minus up to sqrt(N) milliseconds of jitter before returning.",
+	Arguments: []*config.Field{
+		{
+			Name:        "milliseconds",
+			DisplayName: "Milliseconds",
+			Description: "The number of milliseconds this action should take.",
+			Field:       &config.Field_IntField{},
+			IsRequired:  true,
+		},
+	},
+	ReturnTypes: []*config.Field{
+		{
+			Name:        "slept_ms",
+			DisplayName: "Slept Milliseconds",
+			Field:       &config.Field_IntField{},
 		},
 	},
 }
@@ -164,6 +188,11 @@ func (d *Demo) GlobalActions(ctx context.Context, registry actions.ActionRegistr
 		return err
 	}
 
+	err = registry.Register(ctx, sleepForMilliseconds, d.sleepForMilliseconds)
+	if err != nil {
+		return err
+	}
+
 	err = registry.Register(ctx, enableAccount, d.enableAccount)
 	if err != nil {
 		return err
@@ -217,6 +246,41 @@ func (d *Demo) helloIn1Minute(ctx context.Context, args *structpb.Struct) (*stru
 	response := &structpb.Struct{
 		Fields: map[string]*structpb.Value{
 			"hello": structpb.NewStringValue("Hello, " + name.GetStringValue() + "!"),
+		},
+	}
+	return response, nil, nil
+}
+
+func (d *Demo) sleepForMilliseconds(ctx context.Context, args *structpb.Struct) (*structpb.Struct, annotations.Annotations, error) {
+	milliseconds, ok := actions.GetIntArg(args, "milliseconds")
+	if !ok {
+		return nil, nil, fmt.Errorf("missing required argument milliseconds")
+	}
+
+	if milliseconds < 0 {
+		return nil, nil, fmt.Errorf("milliseconds must be greater than or equal to 0")
+	}
+
+	jitterRange := int64(math.Sqrt(float64(milliseconds)))
+	var jitterMilliseconds int64
+	if jitterRange > 0 {
+		// #nosec G404 -- this is non-security jitter for demo sleep timing.
+		jitterMilliseconds = rand.Int63n(2*jitterRange+1) - jitterRange
+	}
+	sleepMilliseconds := milliseconds + jitterMilliseconds
+
+	timer := time.NewTimer(time.Duration(sleepMilliseconds) * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+
+	response := &structpb.Struct{
+		Fields: map[string]*structpb.Value{
+			"slept_ms": structpb.NewNumberValue(float64(sleepMilliseconds)),
 		},
 	}
 	return response, nil, nil
