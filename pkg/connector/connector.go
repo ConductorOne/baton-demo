@@ -25,6 +25,7 @@ func (d *Demo) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
 		newRoleEventFeed(d.client),
 		newProjectEventFeed(d.client),
 		newScopedRoleEventFeed(d.client),
+		newAppEventFeed(d.client),
 	}
 }
 
@@ -32,6 +33,7 @@ func (d *Demo) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
 func (d *Demo) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
 	return []connectorbuilder.ResourceSyncerV2{
 		newUserBuilder(d.client),
+		newAppBuilder(d.client),
 		newGroupBuilder(d.client),
 		newRoleBuilder(d.client),
 		newScopedRoleBuilder(d.client),

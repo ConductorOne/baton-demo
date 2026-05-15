@@ -27,7 +27,7 @@ var (
 	)
 	UserCountField = field.IntField("users",
 		field.WithDescription("Number of users to create."),
-		field.WithDefaultValue(10),
+		field.WithDefaultValue(200),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
 	InitDB     = field.BoolField("init-db", field.WithDescription("Whether to initialize the database."), field.WithDefaultValue(false))

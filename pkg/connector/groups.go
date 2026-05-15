@@ -59,9 +59,16 @@ func (o *groupBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId
 		return nil, nil, err
 	}
 
+	// Build groupID -> appResourceID lookup for child groups
+	groupToApp := o.buildGroupToAppMapping(ctx)
+
 	var ret []*v2.Resource
 	for _, g := range groups {
-		group, err := groupResource(g, parentResourceID)
+		parent := parentResourceID
+		if appResID, ok := groupToApp[g.Id]; ok {
+			parent = appResID
+		}
+		group, err := groupResource(g, parent)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -76,7 +83,14 @@ func (o *groupBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, paren
 	if err != nil {
 		return nil, nil, err
 	}
-	resource, err := groupResource(group, parentResourceId)
+
+	parent := parentResourceId
+	groupToApp := o.buildGroupToAppMapping(ctx)
+	if appResID, ok := groupToApp[group.Id]; ok {
+		parent = appResID
+	}
+
+	resource, err := groupResource(group, parent)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -352,6 +366,25 @@ func (o *groupBuilder) ResourceActions(ctx context.Context, registry actions.Act
 		return err
 	}
 	return nil
+}
+
+// buildGroupToAppMapping builds a lookup from child group IDs to their parent app resource IDs.
+func (o *groupBuilder) buildGroupToAppMapping(ctx context.Context) map[string]*v2.ResourceId {
+	result := make(map[string]*v2.ResourceId)
+	apps, err := o.client.ListApps(ctx)
+	if err != nil {
+		return result
+	}
+	for _, a := range apps {
+		appResID := &v2.ResourceId{
+			ResourceType: appResourceType.Id,
+			Resource:     a.Id,
+		}
+		for _, childGroupID := range a.ChildGroups {
+			result[childGroupID] = appResID
+		}
+	}
+	return result
 }
 
 func newGroupBuilder(client *client.Client) *groupBuilder {

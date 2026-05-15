@@ -318,3 +318,65 @@ func newScopedRoleEventFeed(client *client.Client) *scopedRoleEventFeed {
 		client: client,
 	}
 }
+
+// appEventFeed
+
+type appEventFeed struct {
+	client *client.Client
+}
+
+var _ connectorbuilder.EventFeed = (*appEventFeed)(nil)
+
+func (d *appEventFeed) EventFeedMetadata(ctx context.Context) *v2.EventFeedMetadata {
+	return &v2.EventFeedMetadata{
+		Id:                  "app-change-feed",
+		SupportedEventTypes: []v2.EventType{v2.EventType_EVENT_TYPE_RESOURCE_CHANGE},
+	}
+}
+
+func (d *appEventFeed) ListEvents(
+	ctx context.Context,
+	earliestEvent *timestamppb.Timestamp,
+	sToken *pagination.StreamToken,
+) ([]*v2.Event, *pagination.StreamState, annotations.Annotations, error) {
+	events := []*v2.Event{}
+
+	var occurredAt time.Time
+	if earliestEvent != nil {
+		occurredAt = earliestEvent.AsTime()
+	}
+	apps, nextPageToken, err := d.client.ListAppsByUpdatedAt(ctx, occurredAt, sToken)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	for _, app := range apps {
+		appRes, err := appResource(app, nil)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		events = append(events, &v2.Event{
+			Id:         fmt.Sprintf("app-change-%s-%s", app.UpdatedAt.Format(time.RFC3339Nano), app.Id),
+			OccurredAt: timestamppb.New(app.UpdatedAt),
+			Event: &v2.Event_ResourceChangeEvent{
+				ResourceChangeEvent: &v2.ResourceChangeEvent{
+					ResourceId:       appRes.GetId(),
+					ParentResourceId: appRes.GetParentResourceId(),
+				},
+			},
+		})
+	}
+
+	streamState := &pagination.StreamState{
+		Cursor:  nextPageToken,
+		HasMore: nextPageToken != "",
+	}
+
+	return events, streamState, nil, nil
+}
+
+func newAppEventFeed(client *client.Client) *appEventFeed {
+	return &appEventFeed{
+		client: client,
+	}
+}
