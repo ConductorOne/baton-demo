@@ -14,6 +14,7 @@ import (
 
 	"github.com/doug-martin/goqu/v9"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -69,6 +70,9 @@ type C1File struct {
 	// Sync cleanup settings
 	syncLimit   int
 	skipCleanup bool
+
+	// See WithC1FV2GrantsWriter.
+	v2GrantsWriter bool
 }
 
 // *C1File satisfies connectorstore.Writer (the connector-facing contract),
@@ -97,12 +101,18 @@ func WithC1FPragma(name string, value string) C1FOption {
 	}
 }
 
+// WithC1FReadOnly opens the c1file in read only mode.
+// Write operations will return an error.
+// Read only mode is faster, as it disables journaling and synchronous writes.
 func WithC1FReadOnly(readOnly bool) C1FOption {
 	return func(o *C1File) {
 		o.readOnly = readOnly
 	}
 }
 
+// WithC1FEncoderConcurrency sets the number of created encoders.
+// Default is 1, which disables async encoding/concurrency.
+// 0 uses GOMAXPROCS.
 func WithC1FEncoderConcurrency(concurrency int) C1FOption {
 	return func(o *C1File) {
 		o.encoderConcurrency = concurrency
@@ -121,6 +131,24 @@ func WithC1FSkipCleanup(skip bool) C1FOption {
 func WithC1FSyncCountLimit(limit int) C1FOption {
 	return func(o *C1File) {
 		o.syncLimit = limit
+	}
+}
+
+// WithC1FV2GrantsWriter strips Grant.Entitlement and Grant.Principal
+// from the serialized data blob at write time. Readers rebuild them
+// as identity-only stubs (Id + nested Resource.Id) from the grants
+// row's columns. Stubs carry no DisplayName, Annotations, Purpose,
+// Slug, or traits; callers that need those must fetch the Entitlement
+// or Resource directly. Readers accept both shapes regardless of this
+// flag, so old and new rows coexist. Default false.
+//
+// Per-grant escape hatch: see unsafeForSlim. Grants carrying
+// InsertResourceGrants or any ExternalResourceMatch* annotation stay
+// full-blob — those code paths read non-identity fields off the
+// embedded Resource / Principal.
+func WithC1FV2GrantsWriter(enabled bool) C1FOption {
+	return func(o *C1File) {
+		o.v2GrantsWriter = enabled
 	}
 }
 
@@ -183,6 +211,7 @@ type c1zOptions struct {
 	encoderConcurrency int
 	syncLimit          int
 	skipCleanup        bool
+	v2GrantsWriter     bool
 }
 
 type C1ZOption func(*c1zOptions)
@@ -239,6 +268,14 @@ func WithSyncLimit(limit int) C1ZOption {
 	}
 }
 
+// WithV2GrantsWriter toggles the slim-blob writer path for grants.
+// See WithC1FV2GrantsWriter for details.
+func WithV2GrantsWriter(enabled bool) C1ZOption {
+	return func(o *c1zOptions) {
+		o.v2GrantsWriter = enabled
+	}
+}
+
 // Returns a new C1File instance with its state stored at the provided filename.
 func NewC1ZFile(ctx context.Context, outputFilePath string, opts ...C1ZOption) (*C1File, error) {
 	ctx, span := tracer.Start(ctx, "NewC1ZFile")
@@ -282,6 +319,9 @@ func NewC1ZFile(ctx context.Context, outputFilePath string, opts ...C1ZOption) (
 	if options.skipCleanup {
 		c1fopts = append(c1fopts, WithC1FSkipCleanup(true))
 	}
+	if options.v2GrantsWriter {
+		c1fopts = append(c1fopts, WithC1FV2GrantsWriter(true))
+	}
 
 	c1File, err := NewC1File(ctx, dbFilePath, c1fopts...)
 	if err != nil {
@@ -324,7 +364,12 @@ var checkpointTimeout, _ = strconv.ParseInt(os.Getenv("BATON_WAL_CHECKPOINT_TIME
 // Close ensures that the sqlite database is flushed to disk, and if any changes were made we update the original database
 // with our changes. The provided context is used for the WAL checkpoint operation. If the context is already expired,
 // a fresh context with a timeout is used to ensure the checkpoint completes.
-func (c *C1File) Close(ctx context.Context) error {
+//
+//nolint:nonamedreturns // named return required so the deferred span captures all early-return error paths
+func (c *C1File) Close(ctx context.Context) (retErr error) {
+	ctx, span := tracer.Start(ctx, "C1File.Close")
+	defer func() { uotel.EndSpanWithError(span, retErr) }()
+
 	var err error
 	l := ctxzap.Extract(ctx)
 
@@ -334,6 +379,12 @@ func (c *C1File) Close(ctx context.Context) error {
 		l.Warn("close called on already-closed c1file", zap.String("db_path", c.dbFilePath))
 		return nil
 	}
+
+	span.SetAttributes(
+		attribute.Bool("read_only", c.readOnly),
+		attribute.Bool("db_updated", c.dbUpdated),
+		attribute.String("db_path", c.dbFilePath),
+	)
 
 	if c.rawDb != nil {
 		// CRITICAL: Force a full WAL checkpoint before closing the database.
@@ -370,12 +421,9 @@ func (c *C1File) Close(ctx context.Context) error {
 				l.Error("WAL checkpoint failed before close",
 					zap.Error(err),
 					zap.String("db_path", c.dbFilePath))
-				closeErr := c.rawDb.Close()
-				if closeErr != nil {
+				if closeErr := c.closeRawDB(ctx); closeErr != nil {
 					l.Error("error closing raw db", zap.Error(closeErr))
 				}
-				c.rawDb = nil
-				c.db = nil
 				return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL checkpoint failed: %w", err))
 			}
 			if busy != 0 || (log >= 0 && checkpointed < log) {
@@ -384,23 +432,18 @@ func (c *C1File) Close(ctx context.Context) error {
 					zap.Int("log", log),
 					zap.Int("checkpointed", checkpointed),
 					zap.String("db_path", c.dbFilePath))
-				closeErr := c.rawDb.Close()
-				if closeErr != nil {
+				if closeErr := c.closeRawDB(ctx); closeErr != nil {
 					l.Error("error closing raw db", zap.Error(closeErr))
 				}
-				c.rawDb = nil
-				c.db = nil
 				return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL checkpoint incomplete: busy=%d log=%d checkpointed=%d", busy, log, checkpointed))
 			}
 		}
 
-		err = c.rawDb.Close()
+		err = c.closeRawDB(ctx)
 		if err != nil {
 			return cleanupDbDir(c.dbFilePath, err)
 		}
 	}
-	c.rawDb = nil
-	c.db = nil
 
 	// We only want to save the file if we've made any changes
 	if c.dbUpdated {
@@ -416,7 +459,17 @@ func (c *C1File) Close(ctx context.Context) error {
 			return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL file not empty after close (size=%d) - refusing to save incomplete data", walInfo.Size()))
 		}
 
+		_, saveSpan := tracer.Start(ctx, "C1File.saveC1z")
+		saveSpan.SetAttributes(
+			attribute.String("db_path", c.dbFilePath),
+			attribute.String("output_path", c.outputFilePath),
+			attribute.Int("encoder_concurrency", c.encoderConcurrency),
+		)
+		if dbInfo, statErr := os.Stat(c.dbFilePath); statErr == nil {
+			saveSpan.SetAttributes(attribute.Int64("input_size_bytes", dbInfo.Size()))
+		}
 		err = saveC1z(c.dbFilePath, c.outputFilePath, c.encoderConcurrency)
+		uotel.EndSpanWithError(saveSpan, err)
 		if err != nil {
 			return cleanupDbDir(c.dbFilePath, err)
 		}
@@ -429,6 +482,20 @@ func (c *C1File) Close(ctx context.Context) error {
 	c.closed = true
 
 	return nil
+}
+
+// closeRawDB wraps c.rawDb.Close with a span and drops the handle
+// references on the C1File so callers do not have to repeat the
+// nil-out. Returns the error from rawDb.Close so error paths can
+// still propagate or log it.
+func (c *C1File) closeRawDB(ctx context.Context) error {
+	_, span := tracer.Start(ctx, "C1File.closeRawDB")
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
+	err = c.rawDb.Close()
+	c.rawDb = nil
+	c.db = nil
+	return err
 }
 
 // truncateWAL truncates the WAL file.
@@ -471,7 +538,7 @@ func (c *C1File) init(ctx context.Context) error {
 		return err
 	}
 
-	err = c.InitTables(ctx)
+	shouldOptimize, err := c.InitTables(ctx)
 	if err != nil {
 		l.Error("c1file-init: error initializing tables", zap.Error(err))
 		return err
@@ -488,13 +555,18 @@ func (c *C1File) init(ctx context.Context) error {
 	}
 
 	// Optimize DB. Desired after running migrations to improve performance.
-	_, err = c.db.ExecContext(ctx, "PRAGMA optimize")
-	if err != nil {
-		return err
+	if shouldOptimize {
+		l.Debug("c1file-init: optimizing database", zap.String("db_file_path", c.dbFilePath))
+		startTime := time.Now()
+		_, err = c.db.ExecContext(ctx, "PRAGMA optimize")
+		if err != nil {
+			return err
+		}
+		l.Debug("c1file-init: optimized database",
+			zap.Duration("time_taken", time.Since(startTime)),
+			zap.String("db_file_path", c.dbFilePath),
+		)
 	}
-	l.Debug("c1file-init: optimized database",
-		zap.String("db_file_path", c.dbFilePath),
-	)
 
 	if c.readOnly {
 		// Disable journaling in read only mode, since we're not writing to the database.
@@ -549,32 +621,89 @@ func (c *C1File) init(ctx context.Context) error {
 	return nil
 }
 
-func (c *C1File) InitTables(ctx context.Context) error {
+func getSchemaVersion(ctx context.Context, db *goqu.Database) (int, error) {
+	rows, err := db.QueryContext(ctx, "SELECT schema_version FROM pragma_schema_version;")
+	if err != nil {
+		return 0, fmt.Errorf("c1file-init-tables: error getting schema version: %w", err)
+	}
+	defer rows.Close()
+
+	var schemaVersion int
+	for rows.Next() {
+		err = rows.Scan(&schemaVersion)
+		if err != nil {
+			return 0, fmt.Errorf("c1file-init-tables: error scanning schema version: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("c1file-init-tables: error iterating schema version rows: %w", err)
+	}
+
+	return schemaVersion, nil
+}
+
+// InitTables initializes the tables in the database.
+// Returns true if the any migrations were run, false otherwise.
+func (c *C1File) InitTables(ctx context.Context) (bool, error) {
 	ctx, span := tracer.Start(ctx, "C1File.InitTables")
 	var err error
 	defer func() { uotel.EndSpanWithError(span, err) }()
 
+	shouldOptimize := false
 	err = c.validateDb(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	l := ctxzap.Extract(ctx).With(zap.String("db_file_path", c.dbFilePath))
+
+	// Get schema version before creating tables/indexes/running migrations.
+	schemaVersion, err := getSchemaVersion(ctx, c.db)
+	if err != nil {
+		return false, fmt.Errorf("c1file-init-tables: error getting schema version: %w", err)
+	}
+
 	for _, t := range allTableDescriptors {
 		query, args := t.Schema()
+
+		startTime := time.Now()
 		_, err = c.db.ExecContext(ctx, fmt.Sprintf(query, args...))
 		if err != nil {
 			l.Error("c1file-init-tables: error initializing table schema", zap.Error(err), zap.String("table_name", t.Name()))
-			return fmt.Errorf("c1file-init-tables: error initializing table %s: %w", t.Name(), err)
+			return false, fmt.Errorf("c1file-init-tables: error initializing table %s: %w", t.Name(), err)
 		}
-		err = t.Migrations(ctx, c.db)
+		l.Debug("c1file-init-tables: initialized table",
+			zap.String("table_name", t.Name()),
+			zap.Duration("time_taken", time.Since(startTime)),
+		)
+
+		startTime = time.Now()
+		migrated, err := t.Migrations(ctx, c.db)
 		if err != nil {
-			l.Error("c1file-init-tables: error running migration", zap.Error(err), zap.String("table_name", t.Name()))
-			return fmt.Errorf("c1file-init-tables: error running migration for table %s: %w", t.Name(), err)
+			l.Error("c1file-init-tables: error running migrations", zap.Error(err), zap.String("table_name", t.Name()))
+			return false, fmt.Errorf("c1file-init-tables: error running migrations for table %s: %w", t.Name(), err)
+		}
+		l.Debug("c1file-init-tables: ran migrations",
+			zap.String("table_name", t.Name()),
+			zap.Duration("time_taken", time.Since(startTime)),
+			zap.Bool("migrated", migrated),
+		)
+		if migrated {
+			shouldOptimize = true
 		}
 	}
 
-	return nil
+	if !shouldOptimize {
+		newSchemaVersion, err := getSchemaVersion(ctx, c.db)
+		if err != nil {
+			return false, fmt.Errorf("c1file-init-tables: error getting schema version: %w", err)
+		}
+		if newSchemaVersion > schemaVersion {
+			shouldOptimize = true
+		}
+	}
+
+	return shouldOptimize, nil
 }
 
 // Stats introspects the database and returns the count of objects for the given sync run.
