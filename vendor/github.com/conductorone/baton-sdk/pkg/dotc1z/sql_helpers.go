@@ -44,7 +44,8 @@ type tableDescriptor interface {
 	Name() string
 	Schema() (string, []any)
 	Version() string
-	Migrations(ctx context.Context, db *goqu.Database) error
+	// Returns true if the any migrations were run, false otherwise.
+	Migrations(ctx context.Context, db *goqu.Database) (bool, error)
 }
 
 type listRequest interface {
@@ -593,11 +594,10 @@ func bulkPutConnectorObjectIfNewer[T proto.Message](
 }
 
 func (c *C1File) getResourceObject(ctx context.Context, resourceID *v2.ResourceId, m *v2.Resource, syncID string) error {
-	ctx, span := tracer.Start(ctx, "C1File.getResourceObject")
-	var err error
-	defer func() { uotel.EndSpanWithError(span, err) }()
-
-	err = c.validateDb(ctx)
+	// No span here: this function is always called from C1File.GetResource
+	// which already owns a span. The duplicate emitted one span per
+	// resource-fetch and was a top contributor to mega-trace span counts.
+	err := c.validateDb(ctx)
 	if err != nil {
 		return err
 	}
@@ -654,12 +654,11 @@ func (c *C1File) getResourceObject(ctx context.Context, resourceID *v2.ResourceI
 	return nil
 }
 
+// No span here: every call site (C1File.GetResourceType, GetEntitlement,
+// GetGrant) already owns a span. The duplicate emitted one span per
+// per-resource lookup and was a top contributor to mega-trace span counts.
 func (c *C1File) getConnectorObject(ctx context.Context, tableName string, id string, syncID string, m proto.Message) error {
-	ctx, span := tracer.Start(ctx, "C1File.getConnectorObject")
-	var err error
-	defer func() { uotel.EndSpanWithError(span, err) }()
-
-	err = c.validateDb(ctx)
+	err := c.validateDb(ctx)
 	if err != nil {
 		return err
 	}
