@@ -35,6 +35,11 @@ linters:
     - usestdlibvars
     - whitespace
   settings:
+    gomoddirectives:
+      # Stacked on baton-sdk#941 (machine-credential vending) until it merges.
+      # Remove this allow-list and the go.mod replace once #941 is released.
+      replace-allow-list:
+        - github.com/conductorone/baton-sdk
     exhaustive:
       default-signifies-exhaustive: true
     gocritic:

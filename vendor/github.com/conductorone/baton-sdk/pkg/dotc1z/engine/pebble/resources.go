@@ -41,13 +41,9 @@ func (e *Engine) PutResourceRecords(ctx context.Context, records ...*v3.Resource
 
 		fresh := e.IsFreshSync()
 		skipGet := e.takeFreshResourcesEmpty()
-		idBytes, err := e.resolveSyncBytes("")
-		if err != nil {
-			return err
-		}
 
 		type dedupKey struct {
-			rtID, resID string
+			syncID, rtID, resID string
 		}
 		var dedup map[dedupKey]int
 		if len(records) > 1 {
@@ -56,18 +52,38 @@ func (e *Engine) PutResourceRecords(ctx context.Context, records ...*v3.Resource
 				if r == nil {
 					continue
 				}
-				dedup[dedupKey{r.GetResourceTypeId(), r.GetResourceId()}] = i
+				dedup[dedupKey{r.GetSyncId(), r.GetResourceTypeId(), r.GetResourceId()}] = i
 			}
 		}
 
+		var (
+			lastSyncIDStr string
+			lastIDBytes   []byte
+			haveLast      bool
+		)
 		for i, r := range records {
 			if r == nil {
 				continue
 			}
 			if dedup != nil {
-				if dedup[dedupKey{r.GetResourceTypeId(), r.GetResourceId()}] != i {
+				if dedup[dedupKey{r.GetSyncId(), r.GetResourceTypeId(), r.GetResourceId()}] != i {
 					continue
 				}
+			}
+			var (
+				idBytes []byte
+				err     error
+			)
+			if sid := r.GetSyncId(); haveLast && sid == lastSyncIDStr {
+				idBytes = lastIDBytes
+			} else {
+				idBytes, err = e.resolveSyncBytes(sid)
+				if err != nil {
+					return err
+				}
+				lastSyncIDStr = sid
+				lastIDBytes = idBytes
+				haveLast = true
 			}
 			key := encodeResourceKey(idBytes, r.GetResourceTypeId(), r.GetResourceId())
 			val, err := marshalRecord(r)
@@ -78,7 +94,13 @@ func (e *Engine) PutResourceRecords(ctx context.Context, records ...*v3.Resource
 				oldVal, closer, getErr := e.db.Get(key)
 				switch {
 				case getErr == nil:
-					if err := e.deleteResourceIndexesRaw(idxBatch, idBytes, r.GetResourceTypeId(), r.GetResourceId(), oldVal); err != nil {
+					old := &v3.ResourceRecord{}
+					if err := unmarshalRecord(oldVal, old); err != nil {
+						closer.Close()
+						return fmt.Errorf("PutResourceRecords: unmarshal old %s/%s: %w",
+							r.GetResourceTypeId(), r.GetResourceId(), err)
+					}
+					if err := e.deleteResourceIndexes(idxBatch, idBytes, old); err != nil {
 						closer.Close()
 						return err
 					}
@@ -143,7 +165,12 @@ func (e *Engine) DeleteResourceRecord(ctx context.Context, syncID, resourceTypeI
 			}
 			return err
 		}
-		if err := e.deleteResourceIndexesRaw(batch, idBytes, resourceTypeID, resourceID, oldVal); err != nil {
+		old := &v3.ResourceRecord{}
+		if err := unmarshalRecord(oldVal, old); err != nil {
+			closer.Close()
+			return fmt.Errorf("DeleteResourceRecord: unmarshal old %s/%s: %w", resourceTypeID, resourceID, err)
+		}
+		if err := e.deleteResourceIndexes(batch, idBytes, old); err != nil {
 			closer.Close()
 			return err
 		}
@@ -166,6 +193,19 @@ func (e *Engine) writeResourceIndexes(batch *pebble.Batch, syncIDBytes []byte, r
 		r.GetResourceTypeId(), r.GetResourceId(),
 	)
 	return batch.Set(k, nil, nil)
+}
+
+func (e *Engine) deleteResourceIndexes(batch *pebble.Batch, syncIDBytes []byte, r *v3.ResourceRecord) error {
+	parent := r.GetParent()
+	if parent == nil || parent.GetResourceId() == "" {
+		return nil
+	}
+	k := encodeResourceByParentIndexKey(
+		syncIDBytes,
+		parent.GetResourceTypeId(), parent.GetResourceId(),
+		r.GetResourceTypeId(), r.GetResourceId(),
+	)
+	return batch.Delete(k, nil)
 }
 
 func (e *Engine) IterateResourcesBySync(ctx context.Context, syncID string, yield func(*v3.ResourceRecord) bool) error {

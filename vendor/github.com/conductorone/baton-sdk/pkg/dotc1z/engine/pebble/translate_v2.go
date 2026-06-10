@@ -21,10 +21,9 @@ import (
 
 // --- Grant ---
 
-// V2GrantToV3 produces a v3.GrantRecord from a v2.Grant. The syncID
-// parameter is retained for call-site symmetry with other translators;
-// v3 data records no longer store sync_id in the value because sync scope is
-// encoded in Pebble keys by the engine write path.
+// V2GrantToV3 produces a v3.GrantRecord from a v2.Grant. The caller
+// supplies sync_id since v2.Grant has no sync_id field (the connector
+// writes are scoped to the engine's current sync).
 //
 // The GrantExpandable annotation (if any) is extracted into the
 // dedicated Expansion field and stripped from Annotations, and
@@ -39,6 +38,7 @@ func V2GrantToV3(syncID string, g *v2.Grant) *v3.GrantRecord {
 	}
 	expansion, annotations := extractV2Expansion(g.GetAnnotations())
 	return v3.GrantRecord_builder{
+		SyncId:         syncID,
 		ExternalId:     g.GetId(),
 		Entitlement:    entitlementToRef(g.GetEntitlement()),
 		Principal:      resourceToPrincipalRef(g.GetPrincipal()),
@@ -241,6 +241,7 @@ func (a *grantTranslateArena) translateV2Grant(syncID string, g *v2.Grant) *v3.G
 	}
 	a.grantRecords = append(a.grantRecords, v3.GrantRecord{})
 	rec := &a.grantRecords[len(a.grantRecords)-1]
+	rec.SetSyncId(syncID)
 	rec.SetExternalId(g.GetId())
 	if entRef != nil {
 		rec.SetEntitlement(entRef)
@@ -325,8 +326,7 @@ func v3GrantSourcesToV2(m map[string]*v3.GrantSourceRecord) *v2.GrantSources {
 
 // --- Resource ---
 
-// V2ResourceToV3 maps v2.Resource → v3.ResourceRecord. syncID is not stored in
-// the value; Pebble keys carry sync scope.
+// V2ResourceToV3 maps v2.Resource → v3.ResourceRecord. Caller supplies sync_id.
 func V2ResourceToV3(syncID string, r *v2.Resource) *v3.ResourceRecord {
 	if r == nil {
 		return nil
@@ -339,6 +339,7 @@ func V2ResourceToV3(syncID string, r *v2.Resource) *v3.ResourceRecord {
 		}.Build()
 	}
 	return v3.ResourceRecord_builder{
+		SyncId:         syncID,
 		ResourceTypeId: r.GetId().GetResourceType(),
 		ResourceId:     r.GetId().GetResource(),
 		DisplayName:    r.GetDisplayName(),
@@ -386,6 +387,7 @@ func V2ResourceTypeToV3(syncID string, rt *v2.ResourceType) *v3.ResourceTypeReco
 		traits = append(traits, traitToString(t))
 	}
 	return v3.ResourceTypeRecord_builder{
+		SyncId:            syncID,
 		ExternalId:        rt.GetId(),
 		DisplayName:       rt.GetDisplayName(),
 		Traits:            traits,
@@ -463,6 +465,7 @@ func V2EntitlementToV3(syncID string, e *v2.Entitlement) *v3.EntitlementRecord {
 		}
 	}
 	return v3.EntitlementRecord_builder{
+		SyncId:                     syncID,
 		ExternalId:                 e.GetId(),
 		Resource:                   res,
 		DisplayName:                e.GetDisplayName(),

@@ -33,7 +33,7 @@ func (e *Engine) PutResourceTypeRecords(ctx context.Context, records ...*v3.Reso
 			if r == nil {
 				continue
 			}
-			idBytes, err := e.resolveSyncBytes("")
+			idBytes, err := e.resolveSyncBytes(r.GetSyncId())
 			if err != nil {
 				return err
 			}

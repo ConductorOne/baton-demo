@@ -271,6 +271,8 @@ func (m *ResourceTypeRecord) validate(all bool) error {
 
 	var errors []error
 
+	// no validation rules for SyncId
+
 	// no validation rules for ExternalId
 
 	// no validation rules for DisplayName
@@ -443,6 +445,8 @@ func (m *ResourceRecord) validate(all bool) error {
 	}
 
 	var errors []error
+
+	// no validation rules for SyncId
 
 	// no validation rules for ResourceTypeId
 
@@ -643,6 +647,8 @@ func (m *EntitlementRecord) validate(all bool) error {
 	}
 
 	var errors []error
+
+	// no validation rules for SyncId
 
 	// no validation rules for ExternalId
 
@@ -847,6 +853,8 @@ func (m *GrantRecord) validate(all bool) error {
 	}
 
 	var errors []error
+
+	// no validation rules for SyncId
 
 	// no validation rules for ExternalId
 

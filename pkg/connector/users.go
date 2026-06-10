@@ -186,11 +186,11 @@ func (o *userBuilder) Grants(ctx context.Context, resource *v2.Resource, ops res
 
 func (r *userBuilder) RotateCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsCredentialRotation, annotations.Annotations, error) {
 	return &v2.CredentialDetailsCredentialRotation{
-		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
+		SupportedCredentialOptions: append([]v2.CapabilityDetailCredentialOption{
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD,
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD,
-		},
+		}, machineCredentialOptions...),
 		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
 	}, nil, nil
 }
@@ -201,13 +201,22 @@ func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, cre
 		return nil, nil, status.Error(codes.InvalidArgument, "baton-demo: non-user resource passed to rotate credentials")
 	}
 
-	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetPlaintextPassword() == nil {
-		return nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no password provided")
-	}
-
 	user, err := o.client.GetUser(ctx, resourceId.Resource)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Machine-credential rotation (#941 arms): regenerate fake material in place.
+	// Material is returned as PlaintextData and never logged.
+	if machine, _, detail, mErr := machineCredentialMaterial(credentialOptions); mErr != nil {
+		return nil, nil, mErr
+	} else if machine != nil {
+		l.Info("rotated machine credential", zap.String("user_id", user.Id), zap.String("credential_detail", detail))
+		return machine, nil, nil
+	}
+
+	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetPlaintextPassword() == nil {
+		return nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no password provided")
 	}
 
 	plainTextPassword, err := crypto.GeneratePassword(ctx, credentialOptions)
@@ -219,7 +228,7 @@ func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, cre
 		Bytes: []byte(plainTextPassword),
 	}
 
-	l.Info("Changing password", zap.String("user_id", user.Id), zap.String("password", plainTextPassword))
+	l.Info("Changing password", zap.String("user_id", user.Id))
 	err = o.client.ChangePassword(ctx, user.Id, plainTextPassword)
 	if err != nil {
 		return nil, nil, err
@@ -230,11 +239,11 @@ func (o *userBuilder) Rotate(ctx context.Context, resourceId *v2.ResourceId, cre
 
 func (o *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
 	return &v2.CredentialDetailsAccountProvisioning{
-		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
+		SupportedCredentialOptions: append([]v2.CapabilityDetailCredentialOption{
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD,
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD,
-		},
+		}, machineCredentialOptions...),
 		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
 	}, nil, nil
 }
@@ -245,6 +254,33 @@ func (o *userBuilder) CreateAccount(
 	credentialOptions *v2.LocalCredentialOptions,
 ) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
+
+	if len(accountInfo.Emails) == 0 {
+		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no email provided")
+	}
+
+	// Machine-credential provisioning (#941 arms): create the account with no
+	// password and return fake machine material (api key / keypair / token). The
+	// material is returned as PlaintextData and never logged.
+	machine, _, machineDetail, mErr := machineCredentialMaterial(credentialOptions)
+	if mErr != nil {
+		return nil, nil, nil, mErr
+	}
+	if machine != nil {
+		createdUser, err := o.client.CreateUser(ctx, accountInfo.Login, accountInfo.Emails[0].Address, "")
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		l.Info("created account with machine credential",
+			zap.String("user_id", createdUser.Id),
+			zap.String("credential_detail", machineDetail),
+		)
+		resource, err := userResource(createdUser, nil)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return &v2.CreateAccountResponse_SuccessResult{Resource: resource}, machine, nil, nil
+	}
 
 	if credentialOptions.GetRandomPassword() == nil && credentialOptions.GetPlaintextPassword() == nil && credentialOptions.GetNoPassword() == nil {
 		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-demo: invalid credential options provided")
@@ -264,11 +300,8 @@ func (o *userBuilder) CreateAccount(
 			Bytes: []byte(plainTextPassword),
 		}
 	}
-	l.Info("Creating user", zap.String("user_id", accountInfo.Login), zap.String("password", plainTextPassword))
+	l.Info("Creating user", zap.String("user_id", accountInfo.Login))
 
-	if len(accountInfo.Emails) == 0 {
-		return nil, nil, nil, status.Error(codes.InvalidArgument, "baton-demo: no email provided")
-	}
 	createdUser, err := o.client.CreateUser(ctx, accountInfo.Login, accountInfo.Emails[0].Address, plainTextPassword)
 	if err != nil {
 		return nil, nil, nil, err
