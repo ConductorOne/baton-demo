@@ -80,19 +80,14 @@ func (e *Engine) PutGrantRecords(ctx context.Context, records ...*v3.GrantRecord
 		// in-sync calls already committed (e.g. paginated sources
 		// emitting an external_id on two pages).
 		skipGet := e.takeFreshGrantsEmpty()
-		// GrantRecord values do not carry sync_id in v3; records are
-		// written under the engine's currently bound sync.
-		idBytes, err := e.resolveSyncBytes("")
-		if err != nil {
-			return err
-		}
 
 		// Dedup pre-pass: keep only the LAST occurrence of each
-		// external_id. The map value is the records[]
+		// (sync_id, external_id). The map value is the records[]
 		// index — when we re-iterate, we process record i only if
-		// dedup[ext] == i.
+		// dedup[(sync,ext)] == i.
 		type dedupKey struct {
-			extID string
+			syncID string
+			extID  string
 		}
 		var dedup map[dedupKey]int
 		if len(records) > 1 {
@@ -101,18 +96,42 @@ func (e *Engine) PutGrantRecords(ctx context.Context, records ...*v3.GrantRecord
 				if r == nil {
 					continue
 				}
-				dedup[dedupKey{r.GetExternalId()}] = i
+				dedup[dedupKey{r.GetSyncId(), r.GetExternalId()}] = i
 			}
 		}
 
+		// Cache the resolved sync_id across records sharing the same
+		// string. The adapter's V2→V3 translator stamps every record
+		// with the engine's current sync, so the common case is one
+		// distinct sync_id per call.
+		var (
+			lastSyncIDStr string
+			lastIDBytes   []byte
+			haveLast      bool
+		)
 		for i, r := range records {
 			if r == nil {
 				continue
 			}
 			if dedup != nil {
-				if dedup[dedupKey{r.GetExternalId()}] != i {
+				if dedup[dedupKey{r.GetSyncId(), r.GetExternalId()}] != i {
 					continue
 				}
+			}
+			var (
+				idBytes []byte
+				err     error
+			)
+			if sid := r.GetSyncId(); haveLast && sid == lastSyncIDStr {
+				idBytes = lastIDBytes
+			} else {
+				idBytes, err = e.resolveSyncBytes(sid)
+				if err != nil {
+					return err
+				}
+				lastSyncIDStr = sid
+				lastIDBytes = idBytes
+				haveLast = true
 			}
 			key := encodeGrantKey(idBytes, r.GetExternalId())
 			val, err := marshalRecord(r)
@@ -123,7 +142,12 @@ func (e *Engine) PutGrantRecords(ctx context.Context, records ...*v3.GrantRecord
 				oldVal, closer, getErr := e.db.Get(key)
 				switch {
 				case getErr == nil:
-					if err := e.deleteGrantIndexesRaw(idxBatch, idBytes, r.GetExternalId(), oldVal); err != nil {
+					old := &v3.GrantRecord{}
+					if err := unmarshalRecord(oldVal, old); err != nil {
+						closer.Close()
+						return fmt.Errorf("PutGrantRecords: unmarshal old %q: %w", r.GetExternalId(), err)
+					}
+					if err := e.deleteGrantIndexes(idxBatch, idBytes, old); err != nil {
 						closer.Close()
 						return err
 					}
@@ -174,9 +198,22 @@ func (e *Engine) UnsafePutUniqueGrantRecords(ctx context.Context, records ...*v3
 		if !e.IsFreshSync() {
 			return errors.New("UnsafePutUniqueGrantRecords: sync is not fresh")
 		}
-		idBytes, err := e.resolveSyncBytes("")
-		if err != nil {
-			return err
+		// Resolve sync_id bytes once per distinct sync_id (usually one) on the
+		// calling goroutine so the parallel encoders only read the map.
+		syncBytes := make(map[string][]byte)
+		for _, r := range records {
+			if r == nil {
+				continue
+			}
+			sid := r.GetSyncId()
+			if _, ok := syncBytes[sid]; ok {
+				continue
+			}
+			idBytes, err := e.resolveSyncBytes(sid)
+			if err != nil {
+				return err
+			}
+			syncBytes[sid] = idBytes
 		}
 
 		type encoded struct {
@@ -217,6 +254,7 @@ func (e *Engine) UnsafePutUniqueGrantRecords(ctx context.Context, records ...*v3
 					if r == nil {
 						continue
 					}
+					idBytes := syncBytes[r.GetSyncId()]
 					val, err := marshalRecord(r)
 					if err != nil {
 						errMu.Lock()
@@ -308,7 +346,12 @@ func (e *Engine) DeleteGrantRecord(ctx context.Context, syncID, externalID strin
 			}
 			return err
 		}
-		if err := e.deleteGrantIndexesRaw(batch, idBytes, externalID, oldVal); err != nil {
+		old := &v3.GrantRecord{}
+		if err := unmarshalRecord(oldVal, old); err != nil {
+			closer.Close()
+			return fmt.Errorf("DeleteGrantRecord: unmarshal old %q: %w", externalID, err)
+		}
+		if err := e.deleteGrantIndexes(batch, idBytes, old); err != nil {
 			closer.Close()
 			return err
 		}
@@ -360,6 +403,66 @@ func (e *Engine) writeGrantIndexes(batch *pebble.Batch, syncIDBytes []byte, r *v
 		if err := batch.Set(k, nil, nil); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// deleteGrantIndexes mirrors writeGrantIndexes but with batch.Delete.
+func (e *Engine) deleteGrantIndexes(batch *pebble.Batch, syncIDBytes []byte, r *v3.GrantRecord) error {
+	ent := r.GetEntitlement()
+	princ := r.GetPrincipal()
+	ext := r.GetExternalId()
+
+	if ent != nil && princ != nil {
+		k := encodeGrantByEntitlementIndexKey(
+			syncIDBytes,
+			ent.GetEntitlementId(),
+			princ.GetResourceTypeId(),
+			princ.GetResourceId(),
+			ext,
+		)
+		if err := batch.Delete(k, nil); err != nil {
+			return err
+		}
+	}
+	if ent != nil && ent.GetResourceId() != "" {
+		k := encodeGrantByEntitlementResourceIndexKey(
+			syncIDBytes,
+			ent.GetResourceTypeId(),
+			ent.GetResourceId(),
+			ext,
+		)
+		if err := batch.Delete(k, nil); err != nil {
+			return err
+		}
+	}
+	if princ != nil {
+		k := encodeGrantByPrincipalIndexKey(
+			syncIDBytes,
+			princ.GetResourceTypeId(),
+			princ.GetResourceId(),
+			ext,
+		)
+		if err := batch.Delete(k, nil); err != nil {
+			return err
+		}
+		kRT := encodeGrantByPrincipalResourceTypeIndexKey(
+			syncIDBytes,
+			princ.GetResourceTypeId(),
+			ext,
+		)
+		if err := batch.Delete(kRT, nil); err != nil {
+			return err
+		}
+	}
+	// Always Delete the needs_expansion key, even when the old
+	// record didn't carry the flag. Delete on a non-existent key
+	// is a Pebble no-op, so this is cheaper than checking the
+	// flag first and gives correct behavior when a connector
+	// flips needs_expansion=false on a subsequent write of the
+	// same external_id.
+	if err := batch.Delete(encodeGrantByNeedsExpansionIndexKey(syncIDBytes, ext), nil); err != nil {
+		return err
 	}
 	return nil
 }

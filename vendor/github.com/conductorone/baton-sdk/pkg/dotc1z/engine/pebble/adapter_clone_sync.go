@@ -141,7 +141,7 @@ func cloneSync(
 		}
 	}()
 
-	manifest, err := BuildManifestWithSyncRuns(ctx, dest, encoding)
+	manifest, err := BuildManifest(encoding)
 	if err != nil {
 		return err
 	}

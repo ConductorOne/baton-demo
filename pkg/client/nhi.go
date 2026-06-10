@@ -9,6 +9,7 @@ import (
 
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/doug-martin/goqu/v9"
+	"github.com/segmentio/ksuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -140,6 +141,9 @@ func (c *Client) CreateSecret(ctx context.Context, s *Secret) (*Secret, error) {
 		return nil, err
 	}
 
+	if s.Id == "" {
+		s.Id = "secret-" + ksuid.New().String()
+	}
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now()
 	}

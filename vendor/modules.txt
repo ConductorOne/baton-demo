@@ -266,7 +266,7 @@ github.com/cockroachdb/swiss
 # github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06
 ## explicit; go 1.19
 github.com/cockroachdb/tokenbucket
-# github.com/conductorone/baton-sdk v0.13.2
+# github.com/conductorone/baton-sdk v0.13.2 => github.com/conductorone/baton-sdk v0.13.2-0.20260610210931-80798d8302a1
 ## explicit; go 1.25.2
 github.com/conductorone/baton-sdk/internal/connector
 github.com/conductorone/baton-sdk/pb/c1/c1z/v1
@@ -986,3 +986,4 @@ modernc.org/memory
 modernc.org/sqlite
 modernc.org/sqlite/lib
 modernc.org/sqlite/vtab
+# github.com/conductorone/baton-sdk => github.com/conductorone/baton-sdk v0.13.2-0.20260610210931-80798d8302a1
