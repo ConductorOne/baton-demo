@@ -15,6 +15,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uotel"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var validColumnNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
@@ -87,10 +89,16 @@ func cloneTableQuery(tableName string, columns []string) string {
 // 3. Execute an ATTACH query to bring our empty sqlite db into the context of our db connection
 // 4. Select directly from the cloned db and insert directly into the new database.
 // 5. Close and save the new database as a c1z at the configured path.
-func (c *C1File) CloneSync(ctx context.Context, outPath string, syncID string) error {
+func (c *C1File) CloneSync(ctx context.Context, outPath string, syncID string, opts ...C1FOption) error {
 	ctx, span := tracer.Start(ctx, "C1File.CloneSync")
 	var err error
 	defer func() { uotel.EndSpanWithError(span, err) }()
+
+	defaultOpts := []C1FOption{
+		WithC1FEncoderConcurrency(0),
+		WithC1FSkipCleanup(true), // No need to clean up old syncs, as we only copied one sync into the new file.
+	}
+	opts = append(defaultOpts, opts...)
 
 	// Be sure that the output path is empty else return an error
 	_, err = os.Stat(outPath)
@@ -141,11 +149,11 @@ func (c *C1File) CloneSync(ctx context.Context, outPath string, syncID string) e
 	}
 
 	if sync == nil {
-		return fmt.Errorf("clone-sync: sync not found")
+		return status.Errorf(codes.NotFound, "clone-sync: sync %s not found", syncID)
 	}
 
 	if sync.EndedAt == nil {
-		return fmt.Errorf("clone-sync: sync is not ended")
+		return status.Errorf(codes.FailedPrecondition, "clone-sync: sync %s is not ended", syncID)
 	}
 
 	qCtx, canc := context.WithCancel(ctx)
@@ -187,10 +195,7 @@ func (c *C1File) CloneSync(ctx context.Context, outPath string, syncID string) e
 
 	// Open a fresh C1File to compress the populated db into a c1z.
 	// No other connections are open on dbPath at this point.
-	outFile, err := NewC1File(ctx, dbPath,
-		WithC1FEncoderConcurrency(0),
-		WithC1FSkipCleanup(true), // No need to clean up old syncs, as we only copied one sync into the new file.
-	)
+	outFile, err := NewC1File(ctx, dbPath, opts...)
 	if err != nil {
 		return err
 	}

@@ -3,11 +3,11 @@ package dotc1z
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,8 +56,24 @@ type C1File struct {
 	closed             bool
 	closedMu           sync.Mutex
 
+	// bulkLoad defers secondary-index creation on a freshly-created
+	// destination. When set, the per-table non-unique secondary indexes
+	// are dropped right after table creation (instant on the empty table)
+	// so the bulk write only maintains the rowid primary key and the
+	// (external_id, sync_id) unique index the upsert path needs; the
+	// deferred indexes are rebuilt in one pass at Close, before the c1z is
+	// flushed. This avoids per-row random-key B-tree maintenance across
+	// the whole load — the dominant cost when writing tens of millions of
+	// rows whose indexed columns are high-cardinality. Only safe for a
+	// net-new, single-writer destination (e.g. c1z sanitize output), so it
+	// is opt-in and never the default.
+	bulkLoad bool
+	// deferredIndexTables records the tables whose secondary indexes were
+	// dropped under bulkLoad, so Close knows to rebuild them.
+	deferredIndexTables []tableDescriptor
+
 	// Cached sync run for listConnectorObjects (avoids N+1 queries)
-	cachedViewSyncRun *syncRun
+	cachedViewSyncRun *SyncRun
 	cachedViewSyncMu  sync.Mutex
 	cachedViewSyncErr error
 
@@ -70,9 +86,20 @@ type C1File struct {
 	// Sync cleanup settings
 	syncLimit   int
 	skipCleanup bool
+	skipVacuum  bool
 
 	// See WithC1FV2GrantsWriter.
 	v2GrantsWriter bool
+
+	// engine is the storage engine to use for newly created files.
+	// Reads dispatch on magic byte regardless of this value. Default
+	// is EngineSQLite (v1 .c1z format).
+	engine Engine
+
+	// payloadEncoding selects the v3 envelope payload framing for
+	// Pebble-written files. Zero value = PayloadEncodingTarZstd
+	// (default). Ignored by the SQLite engine.
+	payloadEncoding PayloadEncoding
 }
 
 // *C1File satisfies connectorstore.Writer (the connector-facing contract),
@@ -82,6 +109,7 @@ type C1File struct {
 var (
 	_ connectorstore.Writer                      = (*C1File)(nil)
 	_ connectorstore.LatestFinishedSyncIDFetcher = (*C1File)(nil)
+	_ C1ZStore                                   = (*C1File)(nil)
 )
 
 type C1FOption func(*C1File)
@@ -110,6 +138,27 @@ func WithC1FReadOnly(readOnly bool) C1FOption {
 	}
 }
 
+// WithC1FBulkLoad enables deferred secondary-index creation for a
+// freshly-created destination. See C1File.bulkLoad. Intended for a net-new,
+// single-writer output (e.g. c1z sanitize); never use it to reopen a file
+// that other readers/writers touch concurrently.
+//
+// Safe-by-construction guard: per table, indexes are deferred only when the
+// table is EMPTY. A non-empty table keeps its indexes live and that table
+// degrades to normal mode (with a warning) — so setting this on a populated
+// file never drops indexes on a large table.
+//
+// Implies skip-cleanup (Cleanup's old-sync deletes would scan without the
+// deferred indexes). Pair with WithC1FSkipVacuum(true) too. The deferred
+// rebuild at Close sorts through SQLite temp storage: provision SQLITE_TMPDIR
+// / temp_store and cache_size for roughly the total index size; under
+// journal_mode=WAL the WAL can grow by about the index size before checkpoint.
+func WithC1FBulkLoad(enabled bool) C1FOption {
+	return func(o *C1File) {
+		o.bulkLoad = enabled
+	}
+}
+
 // WithC1FEncoderConcurrency sets the number of created encoders.
 // Default is 1, which disables async encoding/concurrency.
 // 0 uses GOMAXPROCS.
@@ -126,11 +175,52 @@ func WithC1FSkipCleanup(skip bool) C1FOption {
 	}
 }
 
+// WithC1FSkipVacuum skips the VACUUM step at the end of Cleanup() when set to
+// true. The old-sync delete and WAL truncate inside Cleanup still run.
+//
+// Low-level option for callers operating on a [C1File] directly. Most callers
+// should use [WithSkipVacuum] on [NewC1ZFile] instead, which propagates this
+// setting through the C1Z constructor.
+//
+// Trade-off: skipping VACUUM leaves freed pages on the SQLite freelist instead
+// of reclaiming them, so the c1z file on disk grows across syncs with no upper
+// bound until a real VACUUM runs. Use when the file is consumed immediately
+// and re-encoded (e.g. iterative compaction); avoid when the c1z is intended
+// to sit at rest or be read repeatedly. See also [WithC1FSkipCleanup] to skip
+// the whole Cleanup step instead.
+func WithC1FSkipVacuum(skip bool) C1FOption {
+	return func(o *C1File) {
+		o.skipVacuum = skip
+	}
+}
+
 // WithC1FSyncCountLimit sets the number of syncs to keep during cleanup.
 // If not set, defaults to 2 (or BATON_KEEP_SYNC_COUNT env var if set).
 func WithC1FSyncCountLimit(limit int) C1FOption {
 	return func(o *C1File) {
 		o.syncLimit = limit
+	}
+}
+
+// WithC1FEngine selects the storage engine for new .c1z files. The
+// default is EngineSQLite, which keeps the legacy v1 file format and
+// behavior. EnginePebble selects the v3 engine introduced by the
+// storage-engine-v4 RFC.
+//
+// Engine selection only affects newly created files. Existing files
+// dispatch on their magic byte; readers handle both v1 and v3
+// regardless of this option.
+func WithC1FEngine(engine Engine) C1FOption {
+	return func(o *C1File) {
+		o.engine = engine
+	}
+}
+
+// WithC1FPayloadEncoding selects the v3 envelope payload encoding
+// (TAR_ZSTD default, TAR uncompressed). No-op for SQLite engines.
+func WithC1FPayloadEncoding(enc PayloadEncoding) C1FOption {
+	return func(o *C1File) {
+		o.payloadEncoding = enc
 	}
 }
 
@@ -190,6 +280,40 @@ func NewC1File(ctx context.Context, dbFilePath string, opts ...C1FOption) (*C1Fi
 		opt(c1File)
 	}
 
+	// A read-only open never builds indexes (it discards everything on
+	// close), so bulk load is meaningless there — and would otherwise drop
+	// indexes on a fresh empty open for no reason. Normalize the nonsense
+	// combination to off.
+	if c1File.readOnly {
+		c1File.bulkLoad = false
+	}
+
+	// The deferred-index optimization is a SQLite-engine concern: it drops and
+	// rebuilds the sqlite secondary indexes around the load. The pebble (v3)
+	// engine manages its own storage and does not use those indexes, so bulk
+	// load does not apply there. Make the combination an explicit, logged
+	// no-op rather than leaving it silently unspecified.
+	if c1File.bulkLoad && c1File.engine == EnginePebble {
+		l.Info("new-c1-file: bulk load ignored for the pebble engine; the deferred-index optimization applies only to the sqlite engine")
+		c1File.bulkLoad = false
+	}
+
+	// Bulk load implies skip-cleanup: Cleanup's old-sync DELETEs would
+	// run while the secondary indexes they rely on are dropped, turning each
+	// delete into a full scan. A net-new bulk-load destination has no old
+	// syncs to clean anyway. Callers should also pass WithSkipVacuum(true) —
+	// VACUUM before the deferred indexes are rebuilt is wasted work — but that
+	// stays caller-controlled since it is not a correctness hazard.
+	if c1File.bulkLoad {
+		c1File.skipCleanup = true
+	}
+
+	// Normalize the engine zero value so downstream switch/if-eq
+	// checks treat an unset engine as EngineSQLite.
+	if c1File.engine == "" {
+		c1File.engine = EngineSQLite
+	}
+
 	err = c1File.validateDb(ctx)
 	if err != nil {
 		return nil, err
@@ -211,7 +335,23 @@ type c1zOptions struct {
 	encoderConcurrency int
 	syncLimit          int
 	skipCleanup        bool
+	skipVacuum         bool
 	v2GrantsWriter     bool
+	bulkLoad           bool
+
+	// engine is the storage engine to use for newly created files.
+	// Reads dispatch on magic byte regardless. Default EngineSQLite.
+	engine Engine
+
+	// payloadEncoding controls the v3 envelope payload framing. Only
+	// honored when engine == EnginePebble (the v3 path). Allowed
+	// values: PayloadEncodingTarZstd (default), PayloadEncodingTar.
+	// Zero value means PayloadEncodingTarZstd.
+	payloadEncoding PayloadEncoding
+
+	// decoderPool optionally scopes v3 payload-decoder reuse to the
+	// caller's operation. See WithDecoderPool.
+	decoderPool *EnvelopeDecoderPool
 }
 
 type C1ZOption func(*c1zOptions)
@@ -260,11 +400,39 @@ func WithSkipCleanup(skip bool) C1ZOption {
 	}
 }
 
+// WithSkipVacuum skips the VACUUM step at the end of Cleanup() when set to
+// true. The old-sync delete and WAL truncate inside Cleanup still run.
+//
+// Trade-off: skipping VACUUM leaves freed pages on the SQLite freelist instead
+// of reclaiming them, so the c1z file on disk grows across syncs with no upper
+// bound until a real VACUUM runs. Use when the file is consumed immediately
+// and re-encoded (e.g. iterative compaction where the output is supplanted on
+// the next iteration); avoid when the c1z is intended to sit at rest or be
+// read repeatedly. No effect when [WithSkipCleanup] is also set, since
+// Cleanup returns early in that case.
+func WithSkipVacuum(skip bool) C1ZOption {
+	return func(o *c1zOptions) {
+		o.skipVacuum = skip
+	}
+}
+
 // WithSyncLimit sets the number of syncs to keep during cleanup.
 // If not set, defaults to 2 (or BATON_KEEP_SYNC_COUNT env var if set).
 func WithSyncLimit(limit int) C1ZOption {
 	return func(o *c1zOptions) {
 		o.syncLimit = limit
+	}
+}
+
+// WithEngine selects the storage engine for newly created .c1z files.
+// Default is EngineSQLite (v1 format). EnginePebble enables the v3
+// engine.
+//
+// Reading existing files dispatches on the file's magic byte and is
+// independent of this option.
+func WithEngine(engine Engine) C1ZOption {
+	return func(o *c1zOptions) {
+		o.engine = engine
 	}
 }
 
@@ -276,20 +444,47 @@ func WithV2GrantsWriter(enabled bool) C1ZOption {
 	}
 }
 
+// WithBulkLoad enables deferred secondary-index creation for a
+// freshly-created destination c1z. See WithC1FBulkLoad for the full contract:
+// it is opt-in and never the default; indexes are deferred only on EMPTY
+// tables (a populated table keeps its indexes and degrades to normal mode with
+// a warning); it implies skip-cleanup; pair it with WithSkipVacuum(true); and
+// provision temp space + cache_size for the deferred index rebuild at Close.
+func WithBulkLoad(enabled bool) C1ZOption {
+	return func(o *c1zOptions) {
+		o.bulkLoad = enabled
+	}
+}
+
+// WithPayloadEncoding selects the c1z v3 envelope payload encoding
+// for newly created files written by the Pebble engine. Default is
+// PayloadEncodingTarZstd. PayloadEncodingTar skips the outer zstd
+// compression — useful when Pebble's L5/L6 SSTs are already
+// zstd-compressed at the engine layer, or when the storage target
+// (S3 with Content-Encoding negotiation, etc.) compresses in transit.
+//
+// No-op for SQLite engines; the encoding selector applies only to
+// the v3 envelope written by Pebble.
+func WithPayloadEncoding(enc PayloadEncoding) C1ZOption {
+	return func(o *c1zOptions) {
+		o.payloadEncoding = enc
+	}
+}
+
 // Returns a new C1File instance with its state stored at the provided filename.
 func NewC1ZFile(ctx context.Context, outputFilePath string, opts ...C1ZOption) (*C1File, error) {
 	ctx, span := tracer.Start(ctx, "NewC1ZFile")
 	var err error
 	defer func() { uotel.EndSpanWithError(span, err) }()
 
-	options := &c1zOptions{
-		encoderConcurrency: 1,
+	options, err := buildC1ZOptions(opts...)
+	if err != nil {
+		return nil, err
 	}
-	for _, opt := range opts {
-		opt(options)
-	}
-	if options.encoderConcurrency < 0 {
-		return nil, fmt.Errorf("encoder concurrency must not be negative: %d", options.encoderConcurrency)
+
+	if options.engine == EnginePebble && !options.readOnly {
+		err = fmt.Errorf("new-c1z-file: %s is a v1/sqlite c1z and engine %q was requested; NewC1ZFile cannot return a *C1File for it — open with NewStore to convert", outputFilePath, EnginePebble)
+		return nil, err
 	}
 
 	dbFilePath, _, err := decompressC1z(outputFilePath, options.tmpDir, options.decoderOptions...)
@@ -319,8 +514,20 @@ func NewC1ZFile(ctx context.Context, outputFilePath string, opts ...C1ZOption) (
 	if options.skipCleanup {
 		c1fopts = append(c1fopts, WithC1FSkipCleanup(true))
 	}
+	if options.skipVacuum {
+		c1fopts = append(c1fopts, WithC1FSkipVacuum(true))
+	}
 	if options.v2GrantsWriter {
 		c1fopts = append(c1fopts, WithC1FV2GrantsWriter(true))
+	}
+	if options.bulkLoad {
+		c1fopts = append(c1fopts, WithC1FBulkLoad(true))
+	}
+	if options.engine != "" {
+		c1fopts = append(c1fopts, WithC1FEngine(options.engine))
+	}
+	if options.payloadEncoding != PayloadEncodingUnspecified {
+		c1fopts = append(c1fopts, WithC1FPayloadEncoding(options.payloadEncoding))
 	}
 
 	c1File, err := NewC1File(ctx, dbFilePath, c1fopts...)
@@ -357,26 +564,27 @@ func cleanupDbDir(dbFilePath string, err error) error {
 
 var ErrReadOnly = errors.New("c1z: read only mode")
 
-const defaultCheckpointTimeout = 120
-
-var checkpointTimeout, _ = strconv.ParseInt(os.Getenv("BATON_WAL_CHECKPOINT_TIMEOUT"), 10, 64)
-
-// Close ensures that the sqlite database is flushed to disk, and if any changes were made we update the original database
-// with our changes. The provided context is used for the WAL checkpoint operation. If the context is already expired,
-// a fresh context with a timeout is used to ensure the checkpoint completes.
+// Close ensures that the sqlite database is flushed to disk, and if any
+// changes were made we update the original database with our changes.
+//
+// When there is real finalize work to do (rawDb open, dbUpdated, not
+// read-only), the WAL checkpoint, raw-db close, and saveC1z all run on a
+// detached context bounded by FinalizeTimeout(). Caller cancellation
+// cannot truncate the c1z mid-finalize; the new-root finalize span links
+// back to the caller's trace for navigability without bloating the
+// parent trace.
 //
 //nolint:nonamedreturns // named return required so the deferred span captures all early-return error paths
 func (c *C1File) Close(ctx context.Context) (retErr error) {
 	ctx, span := tracer.Start(ctx, "C1File.Close")
 	defer func() { uotel.EndSpanWithError(span, retErr) }()
 
-	var err error
 	l := ctxzap.Extract(ctx)
 
 	c.closedMu.Lock()
 	defer c.closedMu.Unlock()
 	if c.closed {
-		l.Warn("close called on already-closed c1file", zap.String("db_path", c.dbFilePath))
+		l.Debug("close called on already-closed c1file", zap.String("db_path", c.dbFilePath))
 		return nil
 	}
 
@@ -386,101 +594,172 @@ func (c *C1File) Close(ctx context.Context) (retErr error) {
 		attribute.String("db_path", c.dbFilePath),
 	)
 
+	// Cheap paths (no save-to-disk work) keep the caller's context and
+	// span topology. Read-only opens never write the c1z back, even if
+	// the c1z was opened without being read; the same is true when no
+	// mutations occurred. Every cheap-path branch closes c.rawDb (when
+	// open) before returning so a misuse like opening read-only and
+	// then dirtying via an attached-db mutation still releases the
+	// SQLite handle and any FDs/goroutines it owns.
+	if !c.dbUpdated || c.readOnly {
+		if c.rawDb != nil {
+			if err := c.closeRawDB(ctx); err != nil {
+				return cleanupDbDir(c.dbFilePath, err)
+			}
+		}
+		if c.dbUpdated && c.readOnly {
+			c.closed = true
+			return cleanupDbDir(c.dbFilePath, ErrReadOnly)
+		}
+		if err := cleanupDbDir(c.dbFilePath, nil); err != nil {
+			return err
+		}
+		c.closed = true
+		return nil
+	}
+
+	// Rebuild any indexes deferred during a bulk load before the c1z is
+	// flushed and compressed. This is the headline event of Close on a
+	// whale-scale file (building several secondary indexes over a 50M+-row
+	// grants table is tens of minutes), so it must NOT be exposed to caller
+	// cancellation — a Ctrl-C or parent deadline at the finish line would
+	// otherwise abort the CREATE INDEX. buildDeferredIndexes detaches the
+	// context itself.
+	//
+	// On failure we deliberately do NOT cleanupDbDir: the working database is
+	// the only copy of the just-loaded data, and the realistic failure here
+	// (disk-full during the index sort) is transient. Preserve it and surface
+	// the error so an operator can recover; the path is logged at Error inside
+	// buildDeferredIndexes. We leave c.closed=false and c.rawDb open so the
+	// state stays consistent for a retried Close.
+	if c.bulkLoad {
+		if err := c.buildDeferredIndexes(ctx); err != nil {
+			return err
+		}
+	}
+
+	if err := c.finalize(ctx); err != nil {
+		return err
+	}
+	c.closed = true
+	return nil
+}
+
+// finalize runs the WAL-checkpoint → close-raw-db → saveC1z sequence on a
+// context that is detached from the caller's cancellation. The detached
+// context is bounded by FinalizeTimeout() for the steps that observe
+// ctx (truncateWAL, closeRawDB); saveC1z itself does not take ctx, so
+// its encoder phase is not cancellable today and the upper bound on
+// total finalize wall-clock is effectively FinalizeTimeout +
+// saveC1z-encoder-time. The finalize span is a new root linked to the
+// caller's trace so very long syncs don't end up with the upload
+// subtree inflating their span counts.
+//
+// If the caller propagated a parent ctx error label via
+// uotel.WithParentCtxErrLabel (e.g. syncer.Close did so before
+// detaching), that label wins over re-classifying ctx.Err() — useful
+// because by the time we reach here the caller's ctx may already be
+// the syncer's detached finalizeCtx, which always reports "nil".
+func (c *C1File) finalize(ctx context.Context) error {
+	parentCtxErrLabel := uotel.ClassifyCtxErr(ctx.Err())
+	if propagated, ok := uotel.ParentCtxErrLabel(ctx); ok {
+		parentCtxErrLabel = propagated
+	}
+
+	timeout := FinalizeTimeout()
+	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+
+	finalizeCtx, finalizeSpan := uotel.StartWithLink(finalizeCtx, tracer, "C1File.finalize")
+	var finalizeErr error
+	defer func() { uotel.EndSpanWithError(finalizeSpan, finalizeErr) }()
+	finalizeSpan.SetAttributes(
+		attribute.Bool("c1z.finalize.cancel_observed", parentCtxErrLabel != "nil"),
+		attribute.String("c1z.finalize.parent_ctx_err", parentCtxErrLabel),
+		attribute.Int64("c1z.finalize.timeout_seconds", int64(timeout.Seconds())),
+		attribute.String("c1z.finalize.db_path", c.dbFilePath),
+	)
+	uotel.SetSyncIdentityAttrs(finalizeCtx, finalizeSpan)
+
+	l := ctxzap.Extract(finalizeCtx)
+
+	// Only WAL-checkpoint and close the raw DB if a handle is open.
+	// Some callers (notably TestC1ZDecoder) manually close c.rawDb to
+	// force a checkpoint before calling Close — that path skips both
+	// operations here and proceeds directly to saveC1z.
 	if c.rawDb != nil {
 		// CRITICAL: Force a full WAL checkpoint before closing the database.
 		// This ensures all WAL data is written back to the main database file
 		// and the writes are synced to disk. Without this, on filesystems with
 		// aggressive caching (like ZFS with large ARC), the subsequent saveC1z()
 		// read could see stale data because the checkpoint writes may still be
-		// in kernel buffers.
-		//
-		// TRUNCATE mode: checkpoint as many frames as possible, then truncate
-		// the WAL file to zero bytes. This guarantees all data is in the main
-		// database file before we read it for compression.
-		if c.dbUpdated && !c.readOnly {
-			// Use a dedicated context for the checkpoint. The caller's context
-			// may already be expired (e.g. Temporal activity deadline), but the
-			// checkpoint is a local SQLite operation that must complete to avoid
-			// saving a stale c1z.
-			checkpointCtx := ctx
-			if ctx.Err() != nil {
-				if checkpointTimeout <= 0 {
-					checkpointTimeout = defaultCheckpointTimeout
-				}
-				var checkpointCancel context.CancelFunc
-				checkpointCtx, checkpointCancel = context.WithTimeout(context.Background(), time.Duration(checkpointTimeout)*time.Second)
-				defer checkpointCancel()
+		// in kernel buffers. TRUNCATE mode checkpoints as many frames as possible
+		// then truncates the WAL file to zero bytes.
+		busy, log, checkpointed, err := c.truncateWAL(finalizeCtx)
+		if err != nil {
+			finalizeErr = fmt.Errorf("c1z: WAL checkpoint failed: %w", err)
+			l.Error("WAL checkpoint failed before close",
+				zap.Error(err),
+				zap.String("db_path", c.dbFilePath))
+			if closeErr := c.closeRawDB(finalizeCtx); closeErr != nil {
+				l.Error("error closing raw db", zap.Error(closeErr))
 			}
-
-			// Use QueryRowContext to read the (busy, log, checkpointed) result.
-			// ExecContext silently discards these values, making partial
-			// checkpoints undetectable — the PRAGMA returns nil error even when
-			// it can't checkpoint all frames due to concurrent readers.
-			busy, log, checkpointed, err := c.truncateWAL(checkpointCtx)
-			if err != nil {
-				l.Error("WAL checkpoint failed before close",
-					zap.Error(err),
-					zap.String("db_path", c.dbFilePath))
-				if closeErr := c.closeRawDB(ctx); closeErr != nil {
-					l.Error("error closing raw db", zap.Error(closeErr))
-				}
-				return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL checkpoint failed: %w", err))
+			return cleanupDbDir(c.dbFilePath, finalizeErr)
+		}
+		if busy != 0 || (log >= 0 && checkpointed < log) {
+			finalizeErr = fmt.Errorf("c1z: WAL checkpoint incomplete: busy=%d log=%d checkpointed=%d", busy, log, checkpointed)
+			l.Error("WAL checkpoint incomplete before close",
+				zap.Int("busy", busy),
+				zap.Int("log", log),
+				zap.Int("checkpointed", checkpointed),
+				zap.String("db_path", c.dbFilePath))
+			if closeErr := c.closeRawDB(finalizeCtx); closeErr != nil {
+				l.Error("error closing raw db", zap.Error(closeErr))
 			}
-			if busy != 0 || (log >= 0 && checkpointed < log) {
-				l.Error("WAL checkpoint incomplete before close",
-					zap.Int("busy", busy),
-					zap.Int("log", log),
-					zap.Int("checkpointed", checkpointed),
-					zap.String("db_path", c.dbFilePath))
-				if closeErr := c.closeRawDB(ctx); closeErr != nil {
-					l.Error("error closing raw db", zap.Error(closeErr))
-				}
-				return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL checkpoint incomplete: busy=%d log=%d checkpointed=%d", busy, log, checkpointed))
-			}
+			return cleanupDbDir(c.dbFilePath, finalizeErr)
 		}
 
-		err = c.closeRawDB(ctx)
-		if err != nil {
+		if err := c.closeRawDB(finalizeCtx); err != nil {
+			finalizeErr = err
 			return cleanupDbDir(c.dbFilePath, err)
 		}
 	}
 
-	// We only want to save the file if we've made any changes
-	if c.dbUpdated {
-		if c.readOnly {
-			return cleanupDbDir(c.dbFilePath, ErrReadOnly)
-		}
-
-		// Verify WAL was fully checkpointed. If it still has data,
-		// saveC1z would create a c1z missing the WAL contents since
-		// it only reads the main database file.
-		walPath := c.dbFilePath + "-wal"
-		if walInfo, statErr := os.Stat(walPath); statErr == nil && walInfo.Size() > 0 {
-			return cleanupDbDir(c.dbFilePath, fmt.Errorf("c1z: WAL file not empty after close (size=%d) - refusing to save incomplete data", walInfo.Size()))
-		}
-
-		_, saveSpan := tracer.Start(ctx, "C1File.saveC1z")
-		saveSpan.SetAttributes(
-			attribute.String("db_path", c.dbFilePath),
-			attribute.String("output_path", c.outputFilePath),
-			attribute.Int("encoder_concurrency", c.encoderConcurrency),
-		)
-		if dbInfo, statErr := os.Stat(c.dbFilePath); statErr == nil {
-			saveSpan.SetAttributes(attribute.Int64("input_size_bytes", dbInfo.Size()))
-		}
-		err = saveC1z(c.dbFilePath, c.outputFilePath, c.encoderConcurrency)
-		uotel.EndSpanWithError(saveSpan, err)
-		if err != nil {
-			return cleanupDbDir(c.dbFilePath, err)
-		}
+	// Verify WAL was fully checkpointed. If it still has data, saveC1z
+	// would create a c1z missing the WAL contents since it only reads
+	// the main database file.
+	walPath := c.dbFilePath + "-wal"
+	if walInfo, statErr := os.Stat(walPath); statErr == nil && walInfo.Size() > 0 {
+		finalizeErr = fmt.Errorf("c1z: WAL file not empty after close (size=%d) - refusing to save incomplete data", walInfo.Size())
+		return cleanupDbDir(c.dbFilePath, finalizeErr)
 	}
 
-	err = cleanupDbDir(c.dbFilePath, err)
-	if err != nil {
+	saveCtx, saveSpan := tracer.Start(finalizeCtx, "C1File.saveC1z")
+	saveSpan.SetAttributes(
+		attribute.String("db_path", c.dbFilePath),
+		attribute.String("output_path", c.outputFilePath),
+		attribute.Int("encoder_concurrency", c.encoderConcurrency),
+	)
+	if dbInfo, statErr := os.Stat(c.dbFilePath); statErr == nil {
+		saveSpan.SetAttributes(attribute.Int64("input_bytes", dbInfo.Size()))
+		finalizeSpan.SetAttributes(attribute.Int64("c1z.finalize.input_bytes", dbInfo.Size()))
+	}
+	_ = saveCtx // saveC1z doesn't currently take ctx; saveCtx is kept so any future span inside saveC1z attaches to saveSpan, not finalizeSpan.
+	saveErr := saveC1z(c.dbFilePath, c.outputFilePath, c.encoderConcurrency)
+	uotel.EndSpanWithError(saveSpan, saveErr)
+	if saveErr != nil {
+		finalizeErr = saveErr
+		return cleanupDbDir(c.dbFilePath, saveErr)
+	}
+	if outInfo, statErr := os.Stat(c.outputFilePath); statErr == nil {
+		finalizeSpan.SetAttributes(attribute.Int64("c1z.finalize.output_bytes", outInfo.Size()))
+		recordC1ZSize(finalizeCtx, "finalize", outInfo.Size())
+	}
+
+	if err := cleanupDbDir(c.dbFilePath, nil); err != nil {
+		finalizeErr = err
 		return err
 	}
-	c.closed = true
-
 	return nil
 }
 
@@ -492,8 +771,13 @@ func (c *C1File) closeRawDB(ctx context.Context) error {
 	_, span := tracer.Start(ctx, "C1File.closeRawDB")
 	var err error
 	defer func() { uotel.EndSpanWithError(span, err) }()
-	err = c.rawDb.Close()
+	if c.rawDb == nil {
+		return nil
+	}
+	// Copy the rawDb to a local variable to avoid race conditions.
+	rawDb := c.rawDb
 	c.rawDb = nil
+	err = rawDb.Close()
 	c.db = nil
 	return err
 }
@@ -677,6 +961,18 @@ func (c *C1File) InitTables(ctx context.Context) (bool, error) {
 			zap.Duration("time_taken", time.Since(startTime)),
 		)
 
+		// Snapshot the table's base secondary indexes BEFORE migrations
+		// run, so deferral targets exactly the Schema()-declared non-unique
+		// indexes and never the partial indexes a migration may add (which
+		// are cheap to maintain and stay live during the load).
+		var deferrable []string
+		if c.bulkLoad {
+			deferrable, err = nonUniqueSecondaryIndexNames(ctx, c.db, t.Name())
+			if err != nil {
+				return false, fmt.Errorf("c1file-init-tables: error listing indexes for %s: %w", t.Name(), err)
+			}
+		}
+
 		startTime = time.Now()
 		migrated, err := t.Migrations(ctx, c.db)
 		if err != nil {
@@ -690,6 +986,41 @@ func (c *C1File) InitTables(ctx context.Context) (bool, error) {
 		)
 		if migrated {
 			shouldOptimize = true
+		}
+
+		// Under bulk load, drop the base non-unique secondary indexes now
+		// (instant on the empty table) so the load maintains only the rowid
+		// PK and the (external_id, sync_id) unique index. They are rebuilt
+		// in one pass at Close via buildDeferredIndexes, which re-runs the
+		// canonical Schema() DDL so the final index set is byte-identical to
+		// the non-bulk path.
+		//
+		// Safety guard: bulkLoad's contract is a net-new destination, but
+		// nothing stops a caller setting it on a reopened, populated file (a
+		// resumed sanitize output, or — since this SDK is linked everywhere —
+		// any production sync file). Dropping an index on a table with millions
+		// of rows is NOT instant, makes index-dependent reads full-scan, and a
+		// crash before Close leaves the working state index-less. So check
+		// emptiness per table: defer only when empty; otherwise keep the indexes
+		// live and degrade to normal mode for that table, with a warning.
+		if c.bulkLoad && len(deferrable) > 0 {
+			var nonEmpty bool
+			row := c.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM "%s" LIMIT 1)`, t.Name()))
+			if err := row.Scan(&nonEmpty); err != nil {
+				return false, fmt.Errorf("c1file-init-tables: error checking emptiness of %s: %w", t.Name(), err)
+			}
+			if nonEmpty {
+				l.Warn("c1file: bulk load requested but table is not empty; keeping indexes live (degrading to normal mode for this table)",
+					zap.String("table_name", t.Name()))
+			} else {
+				for _, idxName := range deferrable {
+					// Identifier comes from our own DDL; quote it for hygiene.
+					if _, derr := c.db.ExecContext(ctx, fmt.Sprintf(`DROP INDEX IF EXISTS "%s"`, idxName)); derr != nil {
+						return false, fmt.Errorf("c1file-init-tables: error deferring index %s on %s: %w", idxName, t.Name(), derr)
+					}
+				}
+				c.deferredIndexTables = append(c.deferredIndexTables, t)
+			}
 		}
 	}
 
@@ -706,42 +1037,171 @@ func (c *C1File) InitTables(ctx context.Context) (bool, error) {
 	return shouldOptimize, nil
 }
 
+// nonUniqueSecondaryIndexNames returns the names of the non-unique
+// secondary indexes on tableName that were created by an explicit CREATE
+// INDEX (origin "c"). The (external_id, sync_id) UNIQUE index is excluded
+// (unique != 0) so it stays in place — the connector-object upsert path
+// relies on it for its ON CONFLICT target. The rowid primary key (origin
+// "pk") and any UNIQUE-constraint indexes (origin "u") are excluded too.
+//
+// Schema()-declared PARTIAL indexes are intentionally deferrable too: they
+// are non-unique origin-"c" indexes and get rebuilt by the same Schema()
+// re-run. (The caller snapshots this set BEFORE migrations, so partial
+// indexes a migration adds afterwards are never in it and stay live.)
+//
+// This assumes PRAGMA index_list's 5-column form (seq, name, unique, origin,
+// partial), which the modernc-pinned SQLite emits. All five columns must be
+// scanned even though `partial` is unused; a driver change to a different
+// column set will fail the Scan loudly here and in the bulk-load tests.
+func nonUniqueSecondaryIndexNames(ctx context.Context, db *goqu.Database, tableName string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`PRAGMA index_list("%s")`, tableName))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var names []string
+	for rows.Next() {
+		var (
+			seq     int
+			name    string
+			unique  int
+			origin  string
+			partial int
+		)
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			return nil, err
+		}
+		if unique == 0 && origin == "c" {
+			names = append(names, name)
+		}
+	}
+	return names, rows.Err()
+}
+
+// buildDeferredIndexes rebuilds, in one pass, the secondary indexes that
+// were dropped under bulk load. It re-runs each table's canonical Schema()
+// DDL: the CREATE TABLE and CREATE UNIQUE INDEX statements are no-ops
+// (IF NOT EXISTS), and the dropped non-unique CREATE INDEX statements are
+// recreated. Using the same DDL as the non-bulk path guarantees the final
+// index set — names, columns, uniqueness — is byte-identical.
+//
+// The rebuild runs on a context DETACHED from the caller: a CREATE INDEX over
+// a 50M+-row table is tens of minutes and is not safe to abort on caller
+// cancellation. It gets its own generous bound (BulkLoadIndexTimeout) sized
+// for index builds, not the much shorter FinalizeTimeout (checkpoint+save).
+//
+// On any failure the working database is PRESERVED (no cleanupDbDir): it holds
+// the only copy of the just-loaded data and the realistic failure (disk-full
+// during the index sort) is transient and recoverable. The path is logged at
+// Error with explicit recovery wording, and the error is returned.
+//
+// Per-table duration is logged at Info — on a whale file this is the headline
+// event of Close. CREATE INDEX sorts through SQLite temp storage, so the
+// rebuild needs temp space on the order of the index size (SQLITE_TMPDIR /
+// temp_store) plus, under journal_mode=WAL, WAL growth of roughly the index
+// size before checkpoint; size cache_size accordingly.
+func (c *C1File) buildDeferredIndexes(ctx context.Context) error {
+	if len(c.deferredIndexTables) == 0 {
+		return nil
+	}
+	l := ctxzap.Extract(ctx).With(zap.String("db_file_path", c.dbFilePath))
+
+	idxCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BulkLoadIndexTimeout())
+	defer cancel()
+
+	for _, t := range c.deferredIndexTables {
+		query, args := t.Schema()
+		startTime := time.Now()
+		if _, err := c.db.ExecContext(idxCtx, fmt.Sprintf(query, args...)); err != nil {
+			l.Error("c1file: deferred index rebuild failed; working database PRESERVED for manual recovery",
+				zap.String("table_name", t.Name()),
+				zap.String("preserved_db_path", c.dbFilePath),
+				zap.Error(err),
+			)
+			return fmt.Errorf("c1file: error building deferred indexes for %s (working db preserved at %s): %w", t.Name(), c.dbFilePath, err)
+		}
+		l.Info("c1file: built deferred indexes",
+			zap.String("table_name", t.Name()),
+			zap.Duration("time_taken", time.Since(startTime)),
+		)
+	}
+	c.deferredIndexTables = nil
+	return nil
+}
+
+func statsToMap(stats *reader_v2.SyncStats, syncType connectorstore.SyncType) map[string]int64 {
+	out := map[string]int64{
+		"resource_types": stats.GetResourceTypes(),
+	}
+	if syncType != connectorstore.SyncTypeResourcesOnly {
+		out["entitlements"] = stats.GetEntitlements()
+		out["grants"] = stats.GetGrants()
+	}
+	for rt, n := range stats.GetResourcesByResourceType() {
+		out[rt] = n
+	}
+	return out
+}
+
 // Stats introspects the database and returns the count of objects for the given sync run.
 // If syncId is empty, it will use the latest sync run of the given type.
 func (c *C1File) Stats(ctx context.Context, syncType connectorstore.SyncType, syncId string) (map[string]int64, error) {
+	sync, stats, err := c.stats(ctx, syncType, syncId, false)
+	if err != nil {
+		return nil, err
+	}
+	return statsToMap(stats, connectorstore.SyncType(sync.GetSyncType())), nil
+}
+
+func (c *C1File) stats(ctx context.Context, syncType connectorstore.SyncType, syncId string, forceRefresh bool) (*reader_v2.SyncRun, *reader_v2.SyncStats, error) {
 	ctx, span := tracer.Start(ctx, "C1File.Stats")
 	var err error
 	defer func() { uotel.EndSpanWithError(span, err) }()
 
-	counts := make(map[string]int64)
-
 	if syncId == "" {
 		syncId, err = c.LatestSyncID(ctx, syncType)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	resp, err := c.GetSync(ctx, reader_v2.SyncsReaderServiceGetSyncRequest_builder{SyncId: syncId}.Build())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if resp == nil || !resp.HasSync() {
-		return nil, status.Errorf(codes.NotFound, "sync '%s' not found", syncId)
+		return nil, nil, status.Errorf(codes.NotFound, "sync '%s' not found", syncId)
 	}
 	sync := resp.GetSync()
 	if syncType != connectorstore.SyncTypeAny && syncType != connectorstore.SyncType(sync.GetSyncType()) {
-		return nil, status.Errorf(codes.InvalidArgument, "sync '%s' is not of type '%s'", syncId, syncType)
+		return nil, nil, status.Errorf(codes.InvalidArgument, "sync '%s' is not of type '%s'", syncId, syncType)
 	}
 	syncType = connectorstore.SyncType(sync.GetSyncType())
 
-	counts["resource_types"] = 0
+	stats := sync.GetStats()
+	if stats != nil && stats.GetResourceTypes() > 0 && !forceRefresh {
+		return sync, stats, nil
+	}
+
+	// Slow path: Calculate sync stats and save them to the sync run so subsequent stats calls
+	stats = &reader_v2.SyncStats{
+		ResourceTypes:           0,
+		Resources:               0,
+		Entitlements:            0,
+		Grants:                  0,
+		ResourcesByResourceType: make(map[string]int64),
+		GrantsByResourceType:    make(map[string]int64),
+	}
 
 	var rtStats []*v2.ResourceType
 	pageToken := ""
 	for {
-		resp, err := c.ListResourceTypes(ctx, v2.ResourceTypesServiceListResourceTypesRequest_builder{PageToken: pageToken}.Build())
+		resp, err := c.ListResourceTypes(ctx, v2.ResourceTypesServiceListResourceTypesRequest_builder{
+			PageToken:    pageToken,
+			ActiveSyncId: syncId,
+		}.Build())
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		rtStats = append(rtStats, resp.GetList()...)
@@ -752,26 +1212,27 @@ func (c *C1File) Stats(ctx context.Context, syncType connectorstore.SyncType, sy
 
 		pageToken = resp.GetNextPageToken()
 	}
-	counts["resource_types"] = int64(len(rtStats))
+	stats.ResourceTypes = int64(len(rtStats))
 
 	// Pre-populate every known resource type with 0 so the result map
 	// always carries an entry per resource type, even if the sync has no
 	// rows of that type. The GROUP BY below only emits resource_type_ids
 	// that have at least one row.
 	for _, rt := range rtStats {
-		counts[rt.GetId()] = 0
+		stats.ResourcesByResourceType[rt.GetId()] = 0
 	}
 	resourceCounts, err := c.countBySyncAndResourceType(ctx, resources.Name(), syncId)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for rtID, n := range resourceCounts {
 		// Only surface counts for resource types in the catalog —
 		// matches the prior per-type loop, which only wrote keys it
 		// iterated over. Stray resource_type_ids in the table (which
 		// shouldn't normally exist) are intentionally ignored here.
-		if _, known := counts[rtID]; known {
-			counts[rtID] = n
+		if _, known := stats.ResourcesByResourceType[rtID]; known {
+			stats.ResourcesByResourceType[rtID] = n
+			stats.Resources += n
 		}
 	}
 
@@ -780,20 +1241,62 @@ func (c *C1File) Stats(ctx context.Context, syncType connectorstore.SyncType, sy
 			Where(goqu.C("sync_id").Eq(syncId)).
 			CountContext(ctx)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		counts["entitlements"] = entitlementsCount
+		stats.Entitlements = entitlementsCount
 
-		grantsCount, err := c.db.From(grants.Name()).
-			Where(goqu.C("sync_id").Eq(syncId)).
-			CountContext(ctx)
+		grantCounts, err := c.countBySyncAndResourceType(ctx, grants.Name(), syncId)
 		if err != nil {
-			return nil, err
+			return nil, nil, fmt.Errorf("count grants: %w", err)
 		}
-		counts["grants"] = grantsCount
+		stats.GrantsByResourceType = grantCounts
+
+		for _, grantsCount := range grantCounts {
+			stats.Grants += grantsCount
+		}
 	}
 
-	return counts, nil
+	// If sync is ended and c1z is not read-only, save stats to the database.
+	if sync.GetEndedAt() != nil && !c.readOnly {
+		statsJSON, err := json.Marshal(stats)
+		if err != nil {
+			return nil, nil, fmt.Errorf("c1file-stats: error marshalling stats: %w", err)
+		}
+		q := c.db.Update(syncRuns.Name()).Set(goqu.Record{
+			"stats": string(statsJSON),
+		}).Where(goqu.C("sync_id").Eq(syncId))
+		query, args, err := q.ToSQL()
+		if err != nil {
+			return nil, nil, fmt.Errorf("c1file-stats: error building SQL: %w", err)
+		}
+		_, err = c.db.ExecContext(ctx, query, args...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("c1file-stats: error saving stats: %w", err)
+		}
+		c.dbUpdated = true
+	}
+
+	return sync, stats, nil
+}
+
+// grantStats introspects the database and returns the count of grants for the given sync run.
+// If syncId is empty, it will use the latest sync run of the given type.
+func (c *C1File) grantStats(ctx context.Context, syncType connectorstore.SyncType, syncId string) (map[string]int64, error) {
+	ctx, span := tracer.Start(ctx, "C1File.GrantStats")
+	var err error
+	defer func() { uotel.EndSpanWithError(span, err) }()
+
+	_, stats, err := c.stats(ctx, syncType, syncId, false)
+	if err != nil {
+		return nil, err
+	}
+
+	statsMap := map[string]int64{}
+	for rt, n := range stats.GetGrantsByResourceType() {
+		statsMap[rt] = n
+	}
+
+	return statsMap, nil
 }
 
 // countBySyncAndResourceType issues a single GROUP BY query that returns
@@ -870,6 +1373,21 @@ func (c *C1File) OutputFilepath() (string, error) {
 	return c.outputFilePath, nil
 }
 
+// Metadata describes the storage backing this c1z. C1File is the
+// SQLite-engine implementation; the v1 file format is implied by
+// the engine. No I/O is performed.
+func (c *C1File) Metadata() connectorstore.StoreMetadata {
+	engine := c.engine
+	if engine == "" {
+		engine = EngineSQLite
+	}
+	return connectorstore.StoreMetadata{
+		Engine: string(engine),
+		Format: C1ZFormatV1.String(),
+		// PayloadEncoding is v3-only; v1 has no envelope framing.
+	}
+}
+
 // CurrentDBSizeBytes returns the current total on-disk size of the underlying
 // uncompressed sqlite database, including the write-ahead log if present.
 // Used by operational tooling (e.g. the grant-expansion progress logger) to
@@ -936,70 +1454,4 @@ func (c *C1FileAttached) DetachFile(dbName string) (*C1FileAttached, error) {
 		safe: false,
 		file: c.file,
 	}, nil
-}
-
-// GrantStats introspects the database and returns the count of grants for the given sync run.
-// If syncId is empty, it will use the latest sync run of the given type.
-func (c *C1File) GrantStats(ctx context.Context, syncType connectorstore.SyncType, syncId string) (map[string]int64, error) {
-	ctx, span := tracer.Start(ctx, "C1File.GrantStats")
-	var err error
-	defer func() { uotel.EndSpanWithError(span, err) }()
-
-	if syncId == "" {
-		syncId, err = c.LatestSyncID(ctx, syncType)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		lastSync, err := c.GetSync(ctx, reader_v2.SyncsReaderServiceGetSyncRequest_builder{SyncId: syncId}.Build())
-		if err != nil {
-			return nil, err
-		}
-		if lastSync == nil {
-			return nil, status.Errorf(codes.NotFound, "sync '%s' not found", syncId)
-		}
-		if syncType != connectorstore.SyncTypeAny && syncType != connectorstore.SyncType(lastSync.GetSync().GetSyncType()) {
-			return nil, status.Errorf(codes.InvalidArgument, "sync '%s' is not of type '%s'", syncId, syncType)
-		}
-	}
-
-	var allResourceTypes []*v2.ResourceType
-	pageToken := ""
-	for {
-		resp, err := c.ListResourceTypes(ctx, v2.ResourceTypesServiceListResourceTypesRequest_builder{PageToken: pageToken}.Build())
-		if err != nil {
-			return nil, err
-		}
-
-		allResourceTypes = append(allResourceTypes, resp.GetList()...)
-
-		if resp.GetNextPageToken() == "" {
-			break
-		}
-
-		pageToken = resp.GetNextPageToken()
-	}
-
-	stats := make(map[string]int64, len(allResourceTypes))
-	// Pre-populate zero counts for every known resource type so the
-	// caller always sees one entry per resource type, even when no
-	// grants exist for it in this sync.
-	for _, rt := range allResourceTypes {
-		stats[rt.GetId()] = 0
-	}
-
-	grantCounts, err := c.countBySyncAndResourceType(ctx, grants.Name(), syncId)
-	if err != nil {
-		return nil, err
-	}
-	for rtID, n := range grantCounts {
-		// Match prior per-type loop: only surface resource types that
-		// exist in the catalog. Stray resource_type_ids in the grants
-		// table (which shouldn't normally exist) are ignored.
-		if _, known := stats[rtID]; known {
-			stats[rtID] = n
-		}
-	}
-
-	return stats, nil
 }
