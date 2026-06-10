@@ -40,3 +40,39 @@ var projectResourceType = &v2.ResourceType{
 	Id:          "project",
 	DisplayName: "Project",
 }
+
+// The secret resource type is for credentials (K1). Secrets carry a SecretTrait
+// and are inventory-only, so they skip entitlements and grants.
+var secretResourceType = &v2.ResourceType{
+	Id:          "secret",
+	DisplayName: "Secret",
+	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
+	Annotations: annotations.New(&v2.SkipEntitlementsAndGrants{}),
+}
+
+// The nhi_app resource type is for non-human-identity apps (K3): TRAIT_APP
+// resources carrying a NonHumanIdentityTrait.
+var nhiAppResourceType = &v2.ResourceType{
+	Id:          "nhi_app",
+	DisplayName: "NHI App",
+	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+	Annotations: annotations.New(&v2.SkipEntitlementsAndGrants{}),
+}
+
+// The assumable_role resource type is for non-human-identity assumable roles
+// (K3): TRAIT_ROLE resources carrying a NonHumanIdentityTrait.
+var assumableRoleResourceType = &v2.ResourceType{
+	Id:          "assumable_role",
+	DisplayName: "Assumable Role",
+	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
+	Annotations: annotations.New(&v2.SkipEntitlementsAndGrants{}),
+}
+
+// The agent resource type is for autonomous non-human actors that authenticate
+// as an identity: TRAIT_AGENT resources carrying an AgentTrait.
+var agentResourceType = &v2.ResourceType{
+	Id:          "agent",
+	DisplayName: "Agent",
+	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_AGENT},
+	Annotations: annotations.New(&v2.SkipEntitlementsAndGrants{}),
+}
