@@ -39,6 +39,17 @@ func pageOffset(pToken *pagination.Token, defaultLimit int) (int, int, error) {
 	return limit, offset, nil
 }
 
+func paginationQueryBounds(limit, offset int) (uint, uint, error) {
+	if limit < 0 {
+		return 0, 0, status.Errorf(codes.InvalidArgument, "limit cannot be negative")
+	}
+	if offset < 0 {
+		return 0, 0, status.Errorf(codes.InvalidArgument, "offset cannot be negative")
+	}
+	// limit and offset are non-negative before converting for goqu Limit/Offset.
+	return uint(limit), uint(offset), nil
+}
+
 // ---- Secrets (TRAIT_SECRET / K1) ----
 
 var secretSelectColumns = []interface{}{
@@ -80,12 +91,16 @@ func (c *Client) ListSecrets(ctx context.Context, pToken *pagination.Token) ([]*
 	if err != nil {
 		return nil, "", err
 	}
+	limitU, offsetU, err := paginationQueryBounds(limit, offset)
+	if err != nil {
+		return nil, "", err
+	}
 
 	q := c.db.From(secrets.Name()).Prepared(true).
 		Select(secretSelectColumns...).
 		Order(goqu.C("id").Asc()).
-		Limit(uint(limit)).  //nolint:gosec // limit validated > 0
-		Offset(uint(offset)) //nolint:gosec // offset validated >= 0
+		Limit(limitU).
+		Offset(offsetU)
 
 	query, args, err := q.ToSQL()
 	if err != nil {
@@ -197,13 +212,17 @@ func (c *Client) ListNHIs(ctx context.Context, kind string, pToken *pagination.T
 	if err != nil {
 		return nil, "", err
 	}
+	limitU, offsetU, err := paginationQueryBounds(limit, offset)
+	if err != nil {
+		return nil, "", err
+	}
 
 	q := c.db.From(nhis.Name()).Prepared(true).
 		Select(nhiSelectColumns...).
 		Where(goqu.C("kind").Eq(kind)).
 		Order(goqu.C("id").Asc()).
-		Limit(uint(limit)).  //nolint:gosec // limit validated > 0
-		Offset(uint(offset)) //nolint:gosec // offset validated >= 0
+		Limit(limitU).
+		Offset(offsetU)
 
 	query, args, err := q.ToSQL()
 	if err != nil {
@@ -286,12 +305,16 @@ func (c *Client) ListAgents(ctx context.Context, pToken *pagination.Token) ([]*A
 	if err != nil {
 		return nil, "", err
 	}
+	limitU, offsetU, err := paginationQueryBounds(limit, offset)
+	if err != nil {
+		return nil, "", err
+	}
 
 	q := c.db.From(agents.Name()).Prepared(true).
 		Select(agentSelectColumns...).
 		Order(goqu.C("id").Asc()).
-		Limit(uint(limit)).  //nolint:gosec // limit validated > 0
-		Offset(uint(offset)) //nolint:gosec // offset validated >= 0
+		Limit(limitU).
+		Offset(offsetU)
 
 	query, args, err := q.ToSQL()
 	if err != nil {
