@@ -36,6 +36,10 @@ func (d *Demo) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceS
 		newRoleBuilder(d.client),
 		newScopedRoleBuilder(d.client),
 		newProjectBuilder(d.client),
+		newSecretBuilder(d.client),
+		newNHIAppBuilder(d.client),
+		newAssumableRoleBuilder(d.client),
+		newAgentBuilder(d.client),
 	}
 }
 

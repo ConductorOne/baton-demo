@@ -9,6 +9,13 @@ type Demo struct {
 	Roles int `mapstructure:"roles"`
 	ScopedRoles int `mapstructure:"scoped-roles"`
 	Users int `mapstructure:"users"`
+	ServiceAccounts int `mapstructure:"service-accounts"`
+	SystemAccounts int `mapstructure:"system-accounts"`
+	Secrets int `mapstructure:"secrets"`
+	UnownedSecrets int `mapstructure:"unowned-secrets"`
+	NhiApps int `mapstructure:"nhi-apps"`
+	AssumableRoles int `mapstructure:"assumable-roles"`
+	Agents int `mapstructure:"agents"`
 	InitDb bool `mapstructure:"init-db"`
 	DbFileName string `mapstructure:"db-file-name"`
 }

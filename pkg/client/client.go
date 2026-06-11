@@ -41,15 +41,91 @@ const (
 	maxEvents = 100
 )
 
+// Account type values stored in the users.account_type column. They map to
+// v2.UserTrait_AccountType in the connector layer.
+const (
+	AccountTypeHuman   = "human"
+	AccountTypeService = "service"
+	AccountTypeSystem  = "system"
+)
+
 type User struct {
+	Id          string
+	Name        string
+	Email       string
+	Enabled     bool
+	AccountType string
+	Attrs       map[string]string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// Secret models a credential (TRAIT_SECRET / K1). IdentityID is the owning
+// identity (a service-account user); when empty the secret is unowned.
+type Secret struct {
+	Id               string
+	Name             string
+	CredentialType   string
+	CredentialDetail string
+	IdentityID       string
+	CreatedAt        time.Time
+	ExpiresAt        *time.Time
+	LastUsedAt       *time.Time
+	UpdatedAt        time.Time
+}
+
+// NHI models a non-human identity (K3) carried on a TRAIT_APP or TRAIT_ROLE
+// resource. Kind selects the resource type ("app" or "role"); NhiType is one
+// of app_registration | assumable_role | managed_identity.
+type NHI struct {
 	Id        string
 	Name      string
-	Email     string
-	Enabled   bool
-	Attrs     map[string]string
+	Kind      string
+	NhiType   string
+	NhiDetail string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// Agent models an autonomous non-human actor (TRAIT_AGENT) that authenticates
+// as a service-account user (IdentityID).
+type Agent struct {
+	Id         string
+	Name       string
+	Status     string
+	IdentityID string
+	Profile    map[string]string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// Secret credential-type values stored in the secrets.credential_type column.
+// These are classification labels, not credential material.
+const (
+	CredentialTypeStaticSecret  = "static_secret"
+	CredentialTypeAsymmetricKey = "asymmetric_key" //nolint:gosec // classification label, not a credential
+	CredentialTypeCertificate   = "certificate"
+)
+
+// NHI kind values selecting the emitted resource type.
+const (
+	NHIKindApp  = "app"
+	NHIKindRole = "role"
+)
+
+// NHI type values stored in the nhis.nhi_type column.
+const (
+	NHITypeAppRegistration = "app_registration"
+	NHITypeAssumableRole   = "assumable_role"
+	NHITypeManagedIdentity = "managed_identity"
+)
+
+// Agent status values stored in the agents.status column.
+const (
+	AgentStatusReady    = "ready"
+	AgentStatusDisabled = "disabled"
+	AgentStatusDeleted  = "deleted"
+)
 
 type Group struct {
 	Id        string
@@ -166,6 +242,7 @@ func (c *Client) migrateUsersTable(ctx context.Context) error {
 
 	hasEnabledColumn := false
 	hasAttrsColumn := false
+	hasAccountTypeColumn := false
 	for rows.Next() {
 		var cid int
 		var name, dataType string
@@ -175,11 +252,13 @@ func (c *Client) migrateUsersTable(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if name == "enabled" {
+		switch name {
+		case "enabled":
 			hasEnabledColumn = true
-		}
-		if name == "attrs" {
+		case "attrs":
 			hasAttrsColumn = true
+		case "account_type":
+			hasAccountTypeColumn = true
 		}
 	}
 
@@ -195,6 +274,15 @@ func (c *Client) migrateUsersTable(ctx context.Context) error {
 	// If the attrs column doesn't exist, add it
 	if !hasAttrsColumn {
 		alterQuery := "ALTER TABLE users ADD COLUMN attrs BLOB"
+		_, err = c.rawDB.ExecContext(ctx, alterQuery)
+		if err != nil {
+			return err
+		}
+	}
+
+	// If the account_type column doesn't exist, add it (defaults to human).
+	if !hasAccountTypeColumn {
+		alterQuery := "ALTER TABLE users ADD COLUMN account_type TEXT NOT NULL DEFAULT 'human'"
 		_, err = c.rawDB.ExecContext(ctx, alterQuery)
 		if err != nil {
 			return err
@@ -243,14 +331,19 @@ func (c *Client) initDB(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			accountType := dbResource.User.AccountType
+			if accountType == "" {
+				accountType = AccountTypeHuman
+			}
 			row := goqu.Record{
-				"id":         dbResource.User.Id,
-				"name":       dbResource.User.Name,
-				"email":      dbResource.User.Email,
-				"enabled":    dbResource.User.Enabled,
-				"attrs":      attrs,
-				"created_at": dbResource.User.CreatedAt,
-				"updated_at": dbResource.User.UpdatedAt,
+				"id":           dbResource.User.Id,
+				"name":         dbResource.User.Name,
+				"email":        dbResource.User.Email,
+				"enabled":      dbResource.User.Enabled,
+				"account_type": accountType,
+				"attrs":        attrs,
+				"created_at":   dbResource.User.CreatedAt,
+				"updated_at":   dbResource.User.UpdatedAt,
 			}
 			baseUserQ := c.db.Insert(users.Name()).Prepared(true)
 			baseUserQ = baseUserQ.Rows(row)
@@ -360,6 +453,50 @@ func (c *Client) initDB(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+		case dbResource.Secret != nil:
+			if _, err := c.CreateSecret(ctx, dbResource.Secret); err != nil {
+				return err
+			}
+		case dbResource.NHI != nil:
+			row := goqu.Record{
+				"id":         dbResource.NHI.Id,
+				"name":       dbResource.NHI.Name,
+				"kind":       dbResource.NHI.Kind,
+				"nhi_type":   dbResource.NHI.NhiType,
+				"nhi_detail": dbResource.NHI.NhiDetail,
+				"created_at": dbResource.NHI.CreatedAt,
+				"updated_at": dbResource.NHI.UpdatedAt,
+			}
+			baseNHIQ := c.db.Insert(nhis.Name()).Prepared(true).Rows(row).OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := baseNHIQ.ToSQL()
+			if err != nil {
+				return err
+			}
+			if _, err = c.db.Exec(query, args...); err != nil {
+				return err
+			}
+		case dbResource.Agent != nil:
+			profile, err := json.Marshal(dbResource.Agent.Profile)
+			if err != nil {
+				return err
+			}
+			row := goqu.Record{
+				"id":          dbResource.Agent.Id,
+				"name":        dbResource.Agent.Name,
+				"status":      dbResource.Agent.Status,
+				"identity_id": nullString(dbResource.Agent.IdentityID),
+				"profile":     profile,
+				"created_at":  dbResource.Agent.CreatedAt,
+				"updated_at":  dbResource.Agent.UpdatedAt,
+			}
+			baseAgentQ := c.db.Insert(agents.Name()).Prepared(true).Rows(row).OnConflict(goqu.DoUpdate("id", row))
+			query, args, err := baseAgentQ.ToSQL()
+			if err != nil {
+				return err
+			}
+			if _, err = c.db.Exec(query, args...); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -375,9 +512,14 @@ type scannable interface {
 func (c *Client) rowToUser(_ context.Context, row scannable) (*User, error) {
 	user := &User{}
 	attrsBytes := []byte{}
-	err := row.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &attrsBytes, &user.CreatedAt, &user.UpdatedAt)
+	accountType := sql.NullString{}
+	err := row.Scan(&user.Id, &user.Name, &user.Email, &user.Enabled, &accountType, &attrsBytes, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
+	}
+	user.AccountType = accountType.String
+	if user.AccountType == "" {
+		user.AccountType = AccountTypeHuman
 	}
 	if len(attrsBytes) > 0 {
 		err = json.Unmarshal(attrsBytes, &user.Attrs)
@@ -416,7 +558,7 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at").
+	q = q.Select("id", "name", "email", "enabled", "account_type", "attrs", "created_at", "updated_at").
 		Order(goqu.C("id").Asc()).
 		Limit(uint(limit)). //nolint:gosec // This won't underflow
 		Offset(uint(offset))
@@ -473,7 +615,7 @@ func (c *Client) ListUsersByUpdatedAt(ctx context.Context, updatedAt time.Time, 
 	}
 
 	q := c.db.From(users.Name()).Prepared(true).
-		Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at").
+		Select("id", "name", "email", "enabled", "account_type", "attrs", "created_at", "updated_at").
 		Where(goqu.C("updated_at").Gt(updatedAt)).
 		Order(goqu.C("updated_at").Desc()).
 		Limit(uint(limit)). //nolint:gosec // This won't underflow
@@ -515,7 +657,7 @@ func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
 	}
 
 	q := c.db.From(users.Name()).Prepared(true)
-	q = q.Select("id", "name", "email", "enabled", "attrs", "created_at", "updated_at")
+	q = q.Select("id", "name", "email", "enabled", "account_type", "attrs", "created_at", "updated_at")
 	q = q.Where(goqu.C("id").Eq(userID))
 
 	query, args, err := q.ToSQL()
@@ -569,13 +711,14 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 
 	now := time.Now()
 	user := &User{
-		Id:        ksuid.New().String(),
-		Name:      name,
-		Email:     email,
-		Enabled:   true, // Default to enabled
-		Attrs:     make(map[string]string),
-		CreatedAt: now,
-		UpdatedAt: now,
+		Id:          ksuid.New().String(),
+		Name:        name,
+		Email:       email,
+		Enabled:     true, // Default to enabled
+		AccountType: AccountTypeHuman,
+		Attrs:       make(map[string]string),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	attrs, err := json.Marshal(user.Attrs)
@@ -585,13 +728,14 @@ func (c *Client) CreateUser(ctx context.Context, name, email, password string) (
 
 	q := c.db.Insert(users.Name()).Prepared(true)
 	q = q.Rows(goqu.Record{
-		"id":         user.Id,
-		"name":       user.Name,
-		"email":      user.Email,
-		"enabled":    user.Enabled,
-		"attrs":      attrs,
-		"created_at": user.CreatedAt,
-		"updated_at": user.UpdatedAt,
+		"id":           user.Id,
+		"name":         user.Name,
+		"email":        user.Email,
+		"enabled":      user.Enabled,
+		"account_type": user.AccountType,
+		"attrs":        attrs,
+		"created_at":   user.CreatedAt,
+		"updated_at":   user.UpdatedAt,
 	})
 
 	query, args, err := q.ToSQL()

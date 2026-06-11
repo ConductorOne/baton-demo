@@ -31,21 +31,6 @@ const (
 	metricDecompressedBytesDelta = "baton.sync.expand.decompressed_bytes_delta"
 )
 
-type rwMutex interface {
-	Lock()
-	Unlock()
-	RLock()
-	RUnlock()
-}
-
-// noOpMutex fakes a mutex for sequential sync.
-type noOpMutex struct{}
-
-func (m *noOpMutex) Lock()    {}
-func (m *noOpMutex) Unlock()  {}
-func (m *noOpMutex) RLock()   {}
-func (m *noOpMutex) RUnlock() {}
-
 type ProgressLog struct {
 	resourceTypes        int
 	resources            map[string]int
@@ -53,7 +38,7 @@ type ProgressLog struct {
 	lastEntitlementLog   map[string]time.Time
 	grantsProgress       map[string]int
 	lastGrantLog         map[string]time.Time
-	mu                   rwMutex // If noOpMutex, sequential mode is enabled. If sync.RWMutex, parallel mode is enabled.
+	mu                   sync.RWMutex
 	l                    *zap.Logger
 	maxLogFrequency      time.Duration
 
@@ -99,17 +84,6 @@ func WithLogger(l *zap.Logger) Option {
 	}
 }
 
-// WithSequentialMode enables/disables mutex protection for sequential sync.
-func WithSequentialMode(sequential bool) Option {
-	return func(p *ProgressLog) {
-		if sequential {
-			p.mu = &noOpMutex{}
-		} else {
-			p.mu = &sync.RWMutex{}
-		}
-	}
-}
-
 func WithLogFrequency(logFrequency time.Duration) Option {
 	return func(p *ProgressLog) {
 		p.maxLogFrequency = logFrequency
@@ -143,7 +117,7 @@ func WithDBSizeProvider(p connectorstore.DBSizeProvider) Option {
 
 // WithMetricsHandler attaches an optional metrics.Handler. When set,
 // LogExpandProgress emits gauges/counters mirroring the structured log fields
-// (actions_remaining, actions_burned, decompressed_bytes, decompressed_bytes_growth)
+// (actions_remaining, actions_burned, decompressed_bytes, decompressed_bytes_delta)
 // so operators can build dashboards instead of scraping log timestamps.
 //
 // The handler should be pre-tagged by the caller (e.g. via Handler.WithTags
@@ -178,7 +152,7 @@ func NewProgressCounts(ctx context.Context, opts ...Option) *ProgressLog {
 		lastGrantLog:         make(map[string]time.Time),
 		l:                    ctxzap.Extract(ctx),
 		maxLogFrequency:      defaultMaxLogFrequency,
-		mu:                   &noOpMutex{}, // Default to sequential mode for backward compatibility
+		mu:                   sync.RWMutex{},
 		metricsHandler:       metrics.NewNoOpHandler(ctx),
 	}
 	for _, o := range opts {

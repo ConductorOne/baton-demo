@@ -87,6 +87,18 @@ func (o *userBuilder) ResourceActions(ctx context.Context, registry actions.Acti
 	return registry.Register(ctx, updateUserProfileSchema, o.updateUserProfile)
 }
 
+// accountType maps the client account-type string to the proto enum.
+func accountType(s string) v2.UserTrait_AccountType {
+	switch s {
+	case client.AccountTypeService:
+		return v2.UserTrait_ACCOUNT_TYPE_SERVICE
+	case client.AccountTypeSystem:
+		return v2.UserTrait_ACCOUNT_TYPE_SYSTEM
+	default:
+		return v2.UserTrait_ACCOUNT_TYPE_HUMAN
+	}
+}
+
 func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
 	// Determine the user status based on the enabled field
 	var status v2.UserTrait_Status_Status
@@ -113,7 +125,7 @@ func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource
 		resource.WithUserLogin(u.Id),
 		resource.WithDetailedStatus(status, statusMessage),
 		resource.WithEmployeeID(u.Id),
-		resource.WithAccountType(v2.UserTrait_ACCOUNT_TYPE_HUMAN),
+		resource.WithAccountType(accountType(u.AccountType)),
 		resource.WithUserProfile(attrs),
 		resource.WithCreatedAt(u.CreatedAt),
 	}

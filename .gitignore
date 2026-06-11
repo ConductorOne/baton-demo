@@ -17,3 +17,7 @@ build/
 # Dependency directories (remove the comment below to include it)
 # vendor/
 dist/
+
+# Built connector binaries
+/baton-demo
+/connector

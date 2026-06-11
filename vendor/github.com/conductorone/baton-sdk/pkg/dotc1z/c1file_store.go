@@ -8,6 +8,7 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/connectorstore"
+	"github.com/conductorone/baton-sdk/pkg/dotc1z/c1zstore"
 	"github.com/conductorone/baton-sdk/pkg/uotel"
 )
 
@@ -275,7 +276,7 @@ func (s c1FileSyncMeta) LatestFullSync(ctx context.Context) (*SyncRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	return syncRunToExported(run), nil
+	return run, nil
 }
 
 // LatestFinishedSyncOfAnyType implements SyncMeta. Returns the most-recent
@@ -285,30 +286,12 @@ func (s c1FileSyncMeta) LatestFinishedSyncOfAnyType(ctx context.Context) (*SyncR
 	if err != nil {
 		return nil, err
 	}
-	return syncRunToExported(run), nil
+	return run, nil
 }
 
 // Stats implements SyncMeta. Signature matches *C1File.Stats exactly.
 func (s c1FileSyncMeta) Stats(ctx context.Context, syncType connectorstore.SyncType, syncID string) (map[string]int64, error) {
 	return s.c.Stats(ctx, syncType, syncID)
-}
-
-// syncRunToExported lifts an internal syncRun into the exported SyncRun shape.
-// Returns nil if run is nil.
-func syncRunToExported(run *syncRun) *SyncRun {
-	if run == nil {
-		return nil
-	}
-	return &SyncRun{
-		ID:           run.ID,
-		StartedAt:    run.StartedAt,
-		EndedAt:      run.EndedAt,
-		SyncToken:    run.SyncToken,
-		Type:         run.Type,
-		ParentSyncID: run.ParentSyncID,
-		LinkedSyncID: run.LinkedSyncID,
-		SupportsDiff: run.SupportsDiff,
-	}
 }
 
 // -----------------------------------------------------------------------------
@@ -317,9 +300,16 @@ func syncRunToExported(run *syncRun) *SyncRun {
 
 type c1FileFileOps struct{ c *C1File }
 
-// CloneSync implements FileOps. Direct passthrough.
-func (f c1FileFileOps) CloneSync(ctx context.Context, outPath string, syncID string) error {
-	return f.c.CloneSync(ctx, outPath, syncID)
+// CloneSync implements FileOps. Translates the engine-neutral
+// CloneSyncOptions into the SQLite-specific C1FOptions applied to the
+// destination file.
+func (f c1FileFileOps) CloneSync(ctx context.Context, outPath string, syncID string, opts ...CloneSyncOption) error {
+	cloneOpts := c1zstore.NewCloneSyncOptions(opts...)
+	var c1fOpts []C1FOption
+	if cloneOpts.TmpDir != "" {
+		c1fOpts = append(c1fOpts, WithC1FTmpDir(cloneOpts.TmpDir))
+	}
+	return f.c.CloneSync(ctx, outPath, syncID, c1fOpts...)
 }
 
 // GenerateSyncDiff implements FileOps. Direct passthrough.
