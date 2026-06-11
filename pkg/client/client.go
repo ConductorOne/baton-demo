@@ -560,7 +560,7 @@ func (c *Client) ListUsers(ctx context.Context, pToken *pagination.Token) ([]*Us
 	q := c.db.From(users.Name()).Prepared(true)
 	q = q.Select("id", "name", "email", "enabled", "account_type", "attrs", "created_at", "updated_at").
 		Order(goqu.C("id").Asc()).
-		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Limit(uint(limit)).
 		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
@@ -618,7 +618,7 @@ func (c *Client) ListUsersByUpdatedAt(ctx context.Context, updatedAt time.Time, 
 		Select("id", "name", "email", "enabled", "account_type", "attrs", "created_at", "updated_at").
 		Where(goqu.C("updated_at").Gt(updatedAt)).
 		Order(goqu.C("updated_at").Desc()).
-		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Limit(uint(limit)).
 		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
@@ -1557,7 +1557,7 @@ func (c *Client) ListGroupsByUpdatedAt(ctx context.Context, updatedAt time.Time,
 		Select("id", "name", "admins", "members", "created_at", "updated_at").
 		Where(goqu.C("updated_at").Gt(updatedAt)).
 		Order(goqu.C("updated_at").Desc()).
-		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Limit(uint(limit)).
 		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
@@ -1615,7 +1615,7 @@ func (c *Client) ListRolesByUpdatedAt(ctx context.Context, updatedAt time.Time, 
 		Select("id", "name", "direct_assignments", "group_assignments", "created_at", "updated_at").
 		Where(goqu.C("updated_at").Gt(updatedAt)).
 		Order(goqu.C("updated_at").Desc()).
-		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Limit(uint(limit)).
 		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
@@ -1673,7 +1673,7 @@ func (c *Client) ListProjectsByUpdatedAt(ctx context.Context, updatedAt time.Tim
 		Select("id", "name", "owner", "group_assignments", "created_at", "updated_at").
 		Where(goqu.C("updated_at").Gt(updatedAt)).
 		Order(goqu.C("updated_at").Desc()).
-		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Limit(uint(limit)).
 		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
@@ -1731,7 +1731,7 @@ func (c *Client) ListScopedRolesByUpdatedAt(ctx context.Context, updatedAt time.
 		Select("id", "project_id", "role_id", "user_assignments", "created_at", "updated_at").
 		Where(goqu.C("updated_at").Gt(updatedAt)).
 		Order(goqu.C("updated_at").Desc()).
-		Limit(uint(limit)). //nolint:gosec // This won't underflow
+		Limit(uint(limit)).
 		Offset(uint(offset))
 
 	query, args, err := q.ToSQL()
