@@ -175,6 +175,11 @@ type Client struct {
 	db     *goqu.Database
 	rawDB  *sql.DB
 	config *config.Demo
+
+	// loginEvents holds synthetic successful-login events, one set per human
+	// user, generated at startup. They back the last-login usage-event feed
+	// (see login_events.go) and are read-only after seeding.
+	loginEvents []LoginEvent
 }
 
 func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
@@ -222,6 +227,13 @@ func NewClient(ctx context.Context, dc *config.Demo) (*Client, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// Synthesize the last-login events that back the usage-event feed. Cheap
+	// and in-memory; only meaningful when --sync-user-last-login is set, but we
+	// always seed so the feed is deterministic regardless of init-db timing.
+	if err := c.seedLoginEvents(ctx, time.Now().UTC()); err != nil {
+		return nil, err
 	}
 
 	return c, nil

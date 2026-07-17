@@ -13,19 +13,26 @@ import (
 
 type Demo struct {
 	client *client.Client
+	config *config.Demo
 }
 
 var _ connectorbuilder.EventFeedsLimited = (*Demo)(nil)
 var _ connectorbuilder.ConnectorBuilderV2 = (*Demo)(nil)
 
 func (d *Demo) EventFeeds(ctx context.Context) []connectorbuilder.EventFeed {
-	return []connectorbuilder.EventFeed{
+	feeds := []connectorbuilder.EventFeed{
 		newUserEventFeed(d.client),
 		newGroupEventFeed(d.client),
 		newRoleEventFeed(d.client),
 		newProjectEventFeed(d.client),
 		newScopedRoleEventFeed(d.client),
 	}
+	// The last-login usage-event feed is opt-in, mirroring baton-dropbox's
+	// sync-user-last-login flag.
+	if d.config != nil && d.config.SyncUserLastLogin {
+		feeds = append(feeds, newLoginUsageEventFeed(d.client, d.config.LoginEmissionOrder))
+	}
+	return feeds
 }
 
 // ResourceSyncers returns a ResourceSyncer for each resource type that should be synced from the upstream service.
@@ -40,6 +47,7 @@ func (d *Demo) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceS
 		newNHIAppBuilder(d.client),
 		newAssumableRoleBuilder(d.client),
 		newAgentBuilder(d.client),
+		newAppBuilder(),
 	}
 }
 
@@ -71,6 +79,7 @@ func New(ctx context.Context, dc *config.Demo) (*Demo, error) {
 	}
 	demo := &Demo{
 		client: cli,
+		config: dc,
 	}
 
 	return demo, nil

@@ -73,6 +73,29 @@ var (
 
 	InitDB     = field.BoolField("init-db", field.WithDescription("Whether to initialize the database."), field.WithDefaultValue(false))
 	DbFileName = field.StringField("db-file-name", field.WithDescription("The name of the database file."), field.WithDefaultValue("baton-demo.db"))
+
+	// Login usage-event feed fields. These drive the synthetic "last login"
+	// usage-event feed used to exercise C1's baton-feed-consumer
+	// (HandleUsageEvents / getUsagePrincipal) end-to-end without needing a real
+	// SaaS tenant. See pkg/connector/login_event_feed.go.
+	SyncUserLastLoginField = field.BoolField("sync-user-last-login",
+		field.WithDescription("Enable the synthetic last-login usage-event feed (mirrors baton-dropbox's opt-in flag)."),
+		field.WithDefaultValue(false),
+	)
+	LoginEmissionOrderField = field.StringField("login-emission-order",
+		field.WithDescription("Order in which login usage events are emitted across pages: 'oldest-first' (reproduces the throttle-ordering bug) or 'reverse-cursor' (newest-first, mirrors baton-dropbox's mitigation)."),
+		field.WithDefaultValue("oldest-first"),
+	)
+	LoginEventsPerUserField = field.IntField("login-events-per-user",
+		field.WithDescription("Number of successful logins synthesized per human user, at strictly increasing timestamps."),
+		field.WithDefaultValue(3),
+		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
+	)
+	LoginEventSpacingSecondsField = field.IntField("login-event-spacing-seconds",
+		field.WithDescription("Seconds between a user's consecutive synthetic logins."),
+		field.WithDefaultValue(60),
+		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
+	)
 )
 
 var relationships = []field.SchemaFieldRelationship{}
@@ -93,4 +116,8 @@ var Config = field.NewConfiguration([]field.SchemaField{
 	AgentCountField,
 	InitDB,
 	DbFileName,
+	SyncUserLastLoginField,
+	LoginEmissionOrderField,
+	LoginEventsPerUserField,
+	LoginEventSpacingSecondsField,
 }, field.WithConstraints(relationships...))

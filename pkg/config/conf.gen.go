@@ -18,6 +18,10 @@ type Demo struct {
 	Agents int `mapstructure:"agents"`
 	InitDb bool `mapstructure:"init-db"`
 	DbFileName string `mapstructure:"db-file-name"`
+	SyncUserLastLogin bool `mapstructure:"sync-user-last-login"`
+	LoginEmissionOrder string `mapstructure:"login-emission-order"`
+	LoginEventsPerUser int `mapstructure:"login-events-per-user"`
+	LoginEventSpacingSeconds int `mapstructure:"login-event-spacing-seconds"`
 }
 
 func (c *Demo) findFieldByTag(tagValue string) (any, bool) {

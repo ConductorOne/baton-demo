@@ -59,6 +59,16 @@ var nhiAppResourceType = &v2.ResourceType{
 	Annotations: annotations.New(&v2.SkipEntitlementsAndGrants{}),
 }
 
+// The demo_app resource type is a single static App the last-login
+// usage-event feed targets, mirroring baton-dropbox's static "Dropbox" app.
+// UsageEvents attach to it; its "access" entitlement is what C1's usage uplift
+// reads the resulting usage principals through.
+var demoAppResourceType = &v2.ResourceType{
+	Id:          "demo_app",
+	DisplayName: "Demo App",
+	Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_APP},
+}
+
 // The assumable_role resource type is for non-human-identity assumable roles
 // (K3): TRAIT_ROLE resources carrying a NonHumanIdentityTrait.
 var assumableRoleResourceType = &v2.ResourceType{
