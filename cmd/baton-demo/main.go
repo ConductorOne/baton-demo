@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/exit"
 	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -26,16 +25,15 @@ func main() {
 
 	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-demo", getConnector, config.Config)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(1)
+		exit.LogExit(err)
+		return
 	}
 
 	cmd.Version = version
 
 	err = cmd.Execute()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(1)
+		exit.LogExit(err)
 	}
 }
 
