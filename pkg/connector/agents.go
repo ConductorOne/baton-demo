@@ -21,29 +21,26 @@ func (o *agentBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 // agentStatus maps the client agent-status string to the proto enum.
-func agentStatus(s string) v2.AgentTrait_AgentStatus {
+func agentStatus(s string) v2.Status_ResourceStatus {
 	switch s {
 	case client.AgentStatusReady:
-		return v2.AgentTrait_AGENT_STATUS_READY
+		return v2.Status_RESOURCE_STATUS_ENABLED
 	case client.AgentStatusDisabled:
-		return v2.AgentTrait_AGENT_STATUS_DISABLED
+		return v2.Status_RESOURCE_STATUS_DISABLED
 	case client.AgentStatusDeleted:
-		return v2.AgentTrait_AGENT_STATUS_DELETED
+		return v2.Status_RESOURCE_STATUS_DELETED
 	default:
-		return v2.AgentTrait_AGENT_STATUS_UNSPECIFIED
+		return v2.Status_RESOURCE_STATUS_UNSPECIFIED
 	}
 }
 
 func agentResource(a *client.Agent, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
-	profile := make(map[string]interface{}, len(a.Profile))
+	profile := make(map[string]any, len(a.Profile))
 	for k, v := range a.Profile {
 		profile[k] = v
 	}
 
-	agentOpts := []resource.AgentTraitOption{
-		resource.WithAgentStatus(agentStatus(a.Status)),
-		resource.WithAgentProfile(profile),
-	}
+	agentOpts := []resource.AgentTraitOption{}
 	// The identity the agent authenticates as (a service-account user).
 	if a.IdentityID != "" {
 		identityID, err := resource.NewResourceID(userResourceType, a.IdentityID)
@@ -59,6 +56,9 @@ func agentResource(a *client.Agent, parentResourceID *v2.ResourceId) (*v2.Resour
 		a.Id,
 		resource.WithAgentTrait(agentOpts...),
 		resource.WithParentResourceID(parentResourceID),
+		resource.WithResourceStatus(agentStatus(a.Status), a.Status),
+		resource.WithResourceProfile(profile),
+		resource.WithResourceCreatedAt(a.CreatedAt),
 	)
 }
 
