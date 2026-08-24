@@ -99,17 +99,15 @@ func accountType(s string) v2.UserTrait_AccountType {
 	}
 }
 
-func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
-	// Determine the user status based on the enabled field
-	var status v2.UserTrait_Status_Status
-	var statusMessage string
-	if u.Enabled {
-		status = v2.UserTrait_Status_STATUS_ENABLED
-		statusMessage = "Enabled"
-	} else {
-		status = v2.UserTrait_Status_STATUS_DISABLED
-		statusMessage = "Disabled"
+func userStatus(enabled bool) (v2.Status_ResourceStatus, string) {
+	if enabled {
+		return v2.Status_RESOURCE_STATUS_ENABLED, "Enabled"
 	}
+	return v2.Status_RESOURCE_STATUS_DISABLED, "Disabled"
+}
+
+func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
+	status, statusMessage := userStatus(u.Enabled)
 
 	attrs := make(map[string]any)
 	for k, v := range u.Attrs {
@@ -120,21 +118,21 @@ func userResource(u *client.User, parentResourceID *v2.ResourceId) (*v2.Resource
 	attrs["created_at"] = u.CreatedAt.Format(time.RFC3339)
 	attrs["updated_at"] = u.UpdatedAt.Format(time.RFC3339)
 
-	traits := []resource.UserTraitOption{
+	userOpts := []resource.UserTraitOption{
 		resource.WithEmail(u.Email, true),
 		resource.WithUserLogin(u.Id),
-		resource.WithDetailedStatus(status, statusMessage),
 		resource.WithEmployeeID(u.Id),
 		resource.WithAccountType(accountType(u.AccountType)),
-		resource.WithUserProfile(attrs),
-		resource.WithCreatedAt(u.CreatedAt),
 	}
-	return resource.NewUserResource(
+	return resource.NewResource(
 		u.Name,
 		userResourceType,
 		u.Id,
-		traits,
+		resource.WithUserTrait(userOpts...),
 		resource.WithParentResourceID(parentResourceID),
+		resource.WithResourceStatus(status, statusMessage),
+		resource.WithResourceProfile(attrs),
+		resource.WithResourceCreatedAt(u.CreatedAt),
 	)
 }
 

@@ -37,7 +37,6 @@ func credentialType(s string) v2.SecretTrait_CredentialType {
 func secretResource(s *client.Secret, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
 	traitOpts := []resource.SecretTraitOption{
 		resource.WithSecretType(credentialType(s.CredentialType)),
-		resource.WithSecretCreatedAt(s.CreatedAt),
 	}
 	if s.CredentialDetail != "" {
 		traitOpts = append(traitOpts, resource.WithSecretDetail(s.CredentialDetail))
@@ -57,12 +56,13 @@ func secretResource(s *client.Secret, parentResourceID *v2.ResourceId) (*v2.Reso
 		traitOpts = append(traitOpts, resource.WithSecretIdentityID(identityID))
 	}
 
-	return resource.NewSecretResource(
+	return resource.NewResource(
 		s.Name,
 		secretResourceType,
 		s.Id,
-		traitOpts,
+		resource.WithSecretTrait(traitOpts...),
 		resource.WithParentResourceID(parentResourceID),
+		resource.WithResourceCreatedAt(s.CreatedAt),
 	)
 }
 

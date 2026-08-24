@@ -42,12 +42,14 @@ func groupResource(g *client.Group, parentResourceID *v2.ResourceId) (*v2.Resour
 	profile["created_at"] = g.CreatedAt.Format(time.RFC3339)
 	profile["updated_at"] = g.UpdatedAt.Format(time.RFC3339)
 
-	return resource.NewGroupResource(
+	return resource.NewResource(
 		g.Name,
 		groupResourceType,
 		g.Id,
-		[]resource.GroupTraitOption{resource.WithGroupProfile(profile)},
+		resource.WithGroupTrait(),
 		resource.WithParentResourceID(parentResourceID),
+		resource.WithResourceProfile(profile),
+		resource.WithResourceCreatedAt(g.CreatedAt),
 	)
 }
 

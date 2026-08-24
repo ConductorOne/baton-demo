@@ -110,7 +110,7 @@ func TestSecretsEmitSecretTrait(t *testing.T) {
 		st := pickSecretTrait(t, r)
 		assert.NotEqual(t, v2.SecretTrait_CREDENTIAL_TYPE_UNSPECIFIED, st.GetCredentialType())
 		credTypes[st.GetCredentialType()]++
-		require.NotNil(t, st.GetCreatedAt())
+		require.NotNil(t, r.GetCreatedAt())
 		if st.GetIdentityId() != nil {
 			owned++
 			// Owned secrets back-reference a user (service account) resource.
@@ -194,7 +194,8 @@ func TestAgentsEmitAgentTrait(t *testing.T) {
 		assert.Equal(t, agentResourceType.Id, r.GetId().GetResourceType())
 		at, err := resource.GetAgentTrait(r)
 		require.NoError(t, err)
-		assert.NotEqual(t, v2.AgentTrait_AGENT_STATUS_UNSPECIFIED, at.GetStatus())
+		require.NotNil(t, r.GetStatus())
+		assert.NotEqual(t, v2.Status_RESOURCE_STATUS_UNSPECIFIED, r.GetStatus().GetStatus())
 		// Each agent authenticates as a service-account user.
 		require.NotNil(t, at.GetIdentityResourceId())
 		assert.Equal(t, userResourceType.Id, at.GetIdentityResourceId().GetResourceType())

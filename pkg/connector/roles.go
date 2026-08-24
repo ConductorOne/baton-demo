@@ -9,6 +9,7 @@ import (
 	"github.com/conductorone/baton-demo/pkg/client"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
@@ -25,22 +26,30 @@ type roleBuilder struct {
 	client *client.Client
 }
 
+var _ connectorbuilder.ResourceSyncerV2 = &roleBuilder{}
+
 func (o *roleBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return roleResourceType
 }
 
 func roleResource(r *client.Role, parentResourceID *v2.ResourceId) (*v2.Resource, error) {
-	traits := []resource.RoleTraitOption{
-		resource.WithRoleProfile(map[string]any{
-			"role_color":         "blue",
-			"total_assignments":  len(r.DirectAssignments) + len(r.GroupAssignments),
-			"direct_assignments": len(r.DirectAssignments),
-			"group_assignments":  len(r.GroupAssignments),
-			"created_at":         r.CreatedAt.Format(time.RFC3339),
-			"updated_at":         r.UpdatedAt.Format(time.RFC3339),
-		}),
+	profile := map[string]any{
+		"role_color":         "blue",
+		"total_assignments":  len(r.DirectAssignments) + len(r.GroupAssignments),
+		"direct_assignments": len(r.DirectAssignments),
+		"group_assignments":  len(r.GroupAssignments),
+		"created_at":         r.CreatedAt.Format(time.RFC3339),
+		"updated_at":         r.UpdatedAt.Format(time.RFC3339),
 	}
-	return resource.NewRoleResource(r.Name, roleResourceType, r.Id, traits, resource.WithParentResourceID(parentResourceID))
+	return resource.NewResource(
+		r.Name,
+		roleResourceType,
+		r.Id,
+		resource.WithRoleTrait(),
+		resource.WithParentResourceID(parentResourceID),
+		resource.WithResourceProfile(profile),
+		resource.WithResourceCreatedAt(r.CreatedAt),
+	)
 }
 
 // List returns all the roles from the database as resource objects

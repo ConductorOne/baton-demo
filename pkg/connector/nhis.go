@@ -42,16 +42,15 @@ func nhiResource(n *client.NHI, rt *v2.ResourceType, parentResourceID *v2.Resour
 	opts := []resource.ResourceOption{
 		resource.WithParentResourceID(parentResourceID),
 		resource.WithNHIType(nhiType(n.NhiType), n.NhiDetail),
+		resource.WithResourceProfile(map[string]any{
+			"nhi_type": n.NhiType,
+		}),
 	}
 	switch n.Kind {
 	case client.NHIKindRole:
-		opts = append(opts, resource.WithRoleTrait(resource.WithRoleProfile(map[string]interface{}{
-			"nhi_type": n.NhiType,
-		})))
+		opts = append(opts, resource.WithRoleTrait())
 	default:
-		opts = append(opts, resource.WithAppTrait(resource.WithAppProfile(map[string]interface{}{
-			"nhi_type": n.NhiType,
-		})))
+		opts = append(opts, resource.WithAppTrait())
 	}
 	return resource.NewResource(n.Name, rt, n.Id, opts...)
 }
