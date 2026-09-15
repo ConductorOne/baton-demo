@@ -2,6 +2,8 @@ module github.com/conductorone/baton-demo
 
 go 1.25.2
 
+toolchain go1.25.13
+
 require (
 	github.com/conductorone/baton-sdk v0.30.0
 	github.com/doug-martin/goqu/v9 v9.19.0
