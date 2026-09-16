@@ -48,6 +48,7 @@ func TestLoadSeededUsersValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			path := filepath.Join(t.TempDir(), "users.csv")
 			if err := os.WriteFile(path, []byte(test.csv), 0o600); err != nil {
 				t.Fatal(err)
