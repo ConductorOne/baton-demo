@@ -1,0 +1,3 @@
+employee_id,email,first_name,last_name,display_name,department,employment_status
+E1000,maya.chen@example.com,Maya,Chen,Maya Chen,Executive,Active
+E1001,priya.shah@example.com,Priya,Shah,Priya Shah,Engineering,Inactive

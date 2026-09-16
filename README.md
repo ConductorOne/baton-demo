@@ -32,11 +32,11 @@ baton resources
 
 ## Seed demo users from a CSV
 
-Pass `--users-csv` with a file that has an `email` column and either `display_name` or `first_name` and `last_name`. `employment_status` is optional; when provided, only `active` users are enabled. Every CSV column is emitted as a user profile attribute, and seeded users keep baton-demo's generated group and role assignments.
+Pass `--users-csv` with a file that has an `email` column and either `display_name` or `first_name` and `last_name`. `employment_status` is optional; when provided, only `active` users are enabled. Every CSV column is emitted as a user profile attribute, and seeded users keep baton-demo's generated group and role assignments. A ready-to-run example is included at `examples/users.csv`.
 
 ```sh
 baton-demo --init-db --db-file-name /tmp/baton-demo-seeded.db \
-  --users-csv ./users.csv
+  --users-csv ./examples/users.csv
 ```
 
 # 

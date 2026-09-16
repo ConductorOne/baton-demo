@@ -11,13 +11,7 @@ import (
 
 func TestLoadSeededUsers(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "users.csv")
-	csv := "employee_id,email,first_name,last_name,display_name,department,employment_status\nE1000,maya.chen@example.com,Maya,Chen,Maya Chen,Executive,Active\nE1001,priya.shah@example.com,Priya,Shah,Priya Shah,Engineering,Inactive\n"
-	if err := os.WriteFile(path, []byte(csv), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	users, err := loadSeededUsers(path)
+	users, err := loadSeededUsers(filepath.Join("..", "..", "examples", "users.csv"))
 	if err != nil {
 		t.Fatal(err)
 	}
