@@ -120,7 +120,7 @@ func TestInitDBWithReorderedSeededUsers(t *testing.T) {
 		if i == 1 {
 			for email, wantName := range map[string]string{"alice@example.com": "Alex (alice@example.com)", "bob@example.com": "Alex (bob@example.com)"} {
 				var name string
-				if err := client.rawDB.QueryRow("SELECT name FROM users WHERE email = ?", email).Scan(&name); err != nil {
+				if err := client.rawDB.QueryRowContext(context.Background(), "SELECT name FROM users WHERE email = ?", email).Scan(&name); err != nil {
 					t.Fatal(err)
 				}
 				if name != wantName {
