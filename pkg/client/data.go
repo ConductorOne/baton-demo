@@ -1,6 +1,7 @@
 package client
 
 import (
+	"crypto/sha256"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -88,7 +89,8 @@ func loadSeededUsers(path string) ([]*User, error) {
 	}
 
 	users := []*User{}
-	names := make(map[string]int)
+	names := make(map[string]struct{})
+	emails := make(map[string]int)
 	_, hasEmploymentStatus := indexes["employment_status"]
 	for rowNumber := 2; ; rowNumber++ {
 		record, err := reader.Read()
@@ -105,6 +107,11 @@ func loadSeededUsers(path string) ([]*User, error) {
 		if email == "" {
 			return nil, fmt.Errorf("baton-demo: users CSV row %d has an empty email", rowNumber)
 		}
+		emailKey := strings.ToLower(email)
+		if previousRow, ok := emails[emailKey]; ok {
+			return nil, fmt.Errorf("baton-demo: users CSV row %d has duplicate email %q (also in row %d)", rowNumber, email, previousRow)
+		}
+		emails[emailKey] = rowNumber
 		attrs := make(map[string]string, len(headers))
 		for i, header := range headers {
 			attrs[strings.TrimSpace(header)] = strings.TrimSpace(record[i])
@@ -116,15 +123,23 @@ func loadSeededUsers(path string) ([]*User, error) {
 		if name == "" {
 			return nil, fmt.Errorf("baton-demo: users CSV row %d has no display_name or first_name/last_name", rowNumber)
 		}
-		if previousRow, ok := names[name]; ok {
-			return nil, fmt.Errorf("baton-demo: users CSV row %d has duplicate name %q (also in row %d)", rowNumber, name, previousRow)
+		if _, ok := names[name]; ok {
+			baseName := name
+			name = fmt.Sprintf("%s (%s)", baseName, email)
+			for suffix := 2; ; suffix++ {
+				if _, ok := names[name]; !ok {
+					break
+				}
+				name = fmt.Sprintf("%s (%s) %d", baseName, email, suffix)
+			}
 		}
-		names[name] = rowNumber
+		names[name] = struct{}{}
 		enabled := true
 		if hasEmploymentStatus {
 			enabled = strings.EqualFold(attrs["employment_status"], "active")
 		}
 		users = append(users, &User{
+			Id:          seededUserID(email),
 			Name:        name,
 			Email:       email,
 			Enabled:     enabled,
@@ -149,6 +164,18 @@ func (g *generator) userCount() int {
 
 func userId(i int) string {
 	return fmt.Sprintf("user-%07d", i)
+}
+
+func seededUserID(email string) string {
+	hash := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return fmt.Sprintf("user-seeded-%x", hash[:16])
+}
+
+func (g *generator) userID(i int) string {
+	if len(g.seededUsers) > 0 {
+		return g.seededUsers[i].Id
+	}
+	return userId(i)
 }
 
 func serviceAccountId(i int) string {
@@ -204,10 +231,10 @@ func (g *generator) serviceAccountIdentityFor(i int) string {
 func (g *generator) Next() (*dbResource, bool) {
 	if g.currentGroup == g.config.Groups {
 		// Make the Everyone group.
-		groupAdmins := []string{userId(0)}
+		groupAdmins := []string{g.userID(0)}
 		groupMembers := []string{}
 		for i := 0; i < g.userCount(); i++ {
-			groupMembers = append(groupMembers, userId(i))
+			groupMembers = append(groupMembers, g.userID(i))
 		}
 
 		db := &dbResource{
@@ -229,9 +256,9 @@ func (g *generator) Next() (*dbResource, bool) {
 		usersPerGroup := 20 // Add 5% of users to each group
 		for i := 0; i < g.userCount(); i++ {
 			if i%usersPerGroup == 0 {
-				groupMembers = append(groupMembers, userId(i))
+				groupMembers = append(groupMembers, g.userID(i))
 				if i%(usersPerGroup*10) == 0 {
-					groupAdmins = append(groupAdmins, userId(i))
+					groupAdmins = append(groupAdmins, g.userID(i))
 				}
 			}
 		}
@@ -253,7 +280,7 @@ func (g *generator) Next() (*dbResource, bool) {
 			Project: &Project{
 				Id:    fmt.Sprintf("project-%07d", g.currentProject),
 				Name:  fmt.Sprintf("Project %07d", g.currentProject),
-				Owner: userId(g.currentProject % g.userCount()),
+				Owner: g.userID(g.currentProject % g.userCount()),
 				GroupAssignments: []string{
 					fmt.Sprintf("group-%07d", g.currentProject%g.config.Groups),
 					fmt.Sprintf("group-%07d", (g.currentProject*10)%g.config.Groups),
@@ -268,8 +295,8 @@ func (g *generator) Next() (*dbResource, bool) {
 	if g.currentRole < g.config.Roles {
 		directAssignments := []string{}
 		if g.userCount() > 0 {
-			directAssignments = append(directAssignments, userId(g.currentRole%g.userCount()))
-			directAssignments = append(directAssignments, userId((g.currentRole*10)%g.userCount()))
+			directAssignments = append(directAssignments, g.userID(g.currentRole%g.userCount()))
+			directAssignments = append(directAssignments, g.userID((g.currentRole*10)%g.userCount()))
 		}
 		groupAssignments := []string{}
 		if g.config.Groups > 5 {
@@ -292,8 +319,8 @@ func (g *generator) Next() (*dbResource, bool) {
 	if g.currentScopedRole < g.config.ScopedRoles {
 		userAssignments := []string{}
 		if g.userCount() > 0 {
-			userAssignments = append(userAssignments, userId(g.currentScopedRole%g.userCount()))
-			userAssignments = append(userAssignments, userId((g.currentScopedRole*5)%g.userCount()))
+			userAssignments = append(userAssignments, g.userID(g.currentScopedRole%g.userCount()))
+			userAssignments = append(userAssignments, g.userID((g.currentScopedRole*5)%g.userCount()))
 		}
 		var db *dbResource
 		if g.config.Projects > 0 && g.config.Roles > 0 {
@@ -314,7 +341,6 @@ func (g *generator) Next() (*dbResource, bool) {
 	if g.currentUser < g.userCount() {
 		if len(g.seededUsers) > 0 {
 			user := *g.seededUsers[g.currentUser]
-			user.Id = userId(g.currentUser)
 			g.currentUser++
 			return &dbResource{User: &user}, true
 		}
@@ -343,7 +369,7 @@ func (g *generator) Next() (*dbResource, bool) {
 			Password: &Password{
 				Id:       fmt.Sprintf("password-%07d", g.currentPassword),
 				Password: "password",
-				UserId:   userId(g.currentPassword),
+				UserId:   g.userID(g.currentPassword),
 			},
 		}
 		g.currentPassword++
