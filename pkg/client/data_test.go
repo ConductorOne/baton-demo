@@ -152,8 +152,11 @@ func TestLoadSeededUsersDefaultsStatusToEnabled(t *testing.T) {
 func TestGeneratorReturnsSeededUsers(t *testing.T) {
 	t.Parallel()
 	generator := generator{
-		config:      &config.Demo{},
-		seededUsers: []*User{{Id: seededUserID("maya@example.com"), Name: "Maya Chen", Email: "maya@example.com"}, {Id: seededUserID("priya@example.com"), Name: "Priya Shah", Email: "priya@example.com"}},
+		config: &config.Demo{},
+		seededUsers: []*User{
+			{Id: seededUserID("maya@example.com"), Name: "Maya Chen", Email: "maya@example.com"},
+			{Id: seededUserID("priya@example.com"), Name: "Priya Shah", Email: "priya@example.com"},
+		},
 	}
 	if got, want := generator.userCount(), 2; got != want {
 		t.Fatalf("userCount() = %d, want %d", got, want)
