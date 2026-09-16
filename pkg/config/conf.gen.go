@@ -9,6 +9,7 @@ type Demo struct {
 	Roles int `mapstructure:"roles"`
 	ScopedRoles int `mapstructure:"scoped-roles"`
 	Users int `mapstructure:"users"`
+	UsersCsv string `mapstructure:"users-csv"`
 	ServiceAccounts int `mapstructure:"service-accounts"`
 	SystemAccounts int `mapstructure:"system-accounts"`
 	Secrets int `mapstructure:"secrets"`

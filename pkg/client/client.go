@@ -312,6 +312,13 @@ func (c *Client) initDB(ctx context.Context) error {
 	generator := &generator{
 		config: c.config,
 	}
+	if c.config.UsersCsv != "" {
+		seededUsers, err := loadSeededUsers(c.config.UsersCsv)
+		if err != nil {
+			return err
+		}
+		generator.seededUsers = seededUsers
+	}
 
 	lastLogTime := time.Now()
 	for {
