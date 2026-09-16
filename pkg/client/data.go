@@ -73,6 +73,7 @@ func loadSeededUsers(path string) ([]*User, error) {
 	defer file.Close()
 
 	reader := csv.NewReader(file)
+	reader.FieldsPerRecord = -1
 	headers, err := reader.Read()
 	if err != nil {
 		return nil, fmt.Errorf("baton-demo: read users CSV header: %w", err)
@@ -87,6 +88,8 @@ func loadSeededUsers(path string) ([]*User, error) {
 	}
 
 	users := []*User{}
+	names := make(map[string]int)
+	_, hasEmploymentStatus := indexes["employment_status"]
 	for rowNumber := 2; ; rowNumber++ {
 		record, err := reader.Read()
 		if err == io.EOF {
@@ -113,10 +116,18 @@ func loadSeededUsers(path string) ([]*User, error) {
 		if name == "" {
 			return nil, fmt.Errorf("baton-demo: users CSV row %d has no display_name or first_name/last_name", rowNumber)
 		}
+		if previousRow, ok := names[name]; ok {
+			return nil, fmt.Errorf("baton-demo: users CSV row %d has duplicate name %q (also in row %d)", rowNumber, name, previousRow)
+		}
+		names[name] = rowNumber
+		enabled := true
+		if hasEmploymentStatus {
+			enabled = strings.EqualFold(attrs["employment_status"], "active")
+		}
 		users = append(users, &User{
 			Name:        name,
 			Email:       email,
-			Enabled:     strings.EqualFold(attrs["employment_status"], "active"),
+			Enabled:     enabled,
 			AccountType: AccountTypeHuman,
 			Attrs:       attrs,
 			CreatedAt:   time.Now(),
