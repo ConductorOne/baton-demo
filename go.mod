@@ -15,6 +15,7 @@ require (
 	go.uber.org/zap v1.28.0
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11
+	modernc.org/sqlite v1.50.0
 )
 
 require (
@@ -144,7 +145,6 @@ require (
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.50.0 // indirect
 )
 
 // replace github.com/conductorone/baton-sdk => ../baton-sdk

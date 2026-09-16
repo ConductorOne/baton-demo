@@ -68,8 +68,10 @@ func TestLoadSeededUsersDisambiguatesDuplicateNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := users[1].Name, "Maya Chen (other@example.com)"; got != want {
-		t.Fatalf("second user name = %q, want %q", got, want)
+	for i, want := range []string{"Maya Chen (maya@example.com)", "Maya Chen (other@example.com)"} {
+		if got := users[i].Name; got != want {
+			t.Fatalf("user %d name = %q, want %q", i, got, want)
+		}
 	}
 }
 
@@ -103,17 +105,28 @@ func TestInitDBWithReorderedSeededUsers(t *testing.T) {
 	dir := t.TempDir()
 	firstCSV := filepath.Join(dir, "first.csv")
 	secondCSV := filepath.Join(dir, "second.csv")
-	if err := os.WriteFile(firstCSV, []byte("email,display_name\nalice@example.com,Alice\nbob@example.com,Bob\n"), 0o600); err != nil {
+	if err := os.WriteFile(firstCSV, []byte("email,display_name\nalice@example.com,Alex\nbob@example.com,Alex\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(secondCSV, []byte("email,display_name\nbob@example.com,Bob\nalice@example.com,Alice\n"), 0o600); err != nil {
+	if err := os.WriteFile(secondCSV, []byte("email,display_name\nbob@example.com,Alex\nalice@example.com,Alex\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	database := filepath.Join(dir, "demo.db")
-	for _, csv := range []string{firstCSV, secondCSV} {
+	for i, csv := range []string{firstCSV, secondCSV} {
 		client, err := NewClient(context.Background(), &config.Demo{DbFileName: database, InitDb: true, UsersCsv: csv})
 		if err != nil {
 			t.Fatalf("NewClient() with %s: %v", csv, err)
+		}
+		if i == 1 {
+			for email, wantName := range map[string]string{"alice@example.com": "Alex (alice@example.com)", "bob@example.com": "Alex (bob@example.com)"} {
+				var name string
+				if err := client.rawDB.QueryRow("SELECT name FROM users WHERE email = ?", email).Scan(&name); err != nil {
+					t.Fatal(err)
+				}
+				if name != wantName {
+					t.Fatalf("name for %s = %q, want %q", email, name, wantName)
+				}
+			}
 		}
 		if err := client.Close(); err != nil {
 			t.Fatal(err)

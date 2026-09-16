@@ -66,6 +66,12 @@ type generator struct {
 	currentAgent         int
 }
 
+type seededUserInput struct {
+	email string
+	name  string
+	attrs map[string]string
+}
+
 func loadSeededUsers(path string) ([]*User, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -88,8 +94,7 @@ func loadSeededUsers(path string) ([]*User, error) {
 		return nil, fmt.Errorf("baton-demo: users CSV must contain an email column")
 	}
 
-	users := []*User{}
-	names := make(map[string]struct{})
+	inputs := []*seededUserInput{}
 	emails := make(map[string]int)
 	_, hasEmploymentStatus := indexes["employment_status"]
 	for rowNumber := 2; ; rowNumber++ {
@@ -123,34 +128,44 @@ func loadSeededUsers(path string) ([]*User, error) {
 		if name == "" {
 			return nil, fmt.Errorf("baton-demo: users CSV row %d has no display_name or first_name/last_name", rowNumber)
 		}
-		if _, ok := names[name]; ok {
-			baseName := name
-			name = fmt.Sprintf("%s (%s)", baseName, email)
-			for suffix := 2; ; suffix++ {
-				if _, ok := names[name]; !ok {
-					break
-				}
-				name = fmt.Sprintf("%s (%s) %d", baseName, email, suffix)
-			}
+		inputs = append(inputs, &seededUserInput{email: email, name: name, attrs: attrs})
+	}
+	if len(inputs) == 0 {
+		return nil, fmt.Errorf("baton-demo: users CSV contains no users")
+	}
+
+	nameCounts := make(map[string]int)
+	for _, input := range inputs {
+		nameCounts[input.name]++
+	}
+	candidateCounts := make(map[string]int)
+	for _, input := range inputs {
+		if nameCounts[input.name] > 1 {
+			input.name = fmt.Sprintf("%s (%s)", input.name, input.email)
 		}
-		names[name] = struct{}{}
+		candidateCounts[input.name]++
+	}
+
+	users := make([]*User, 0, len(inputs))
+	for _, input := range inputs {
+		name := input.name
+		if candidateCounts[name] > 1 {
+			name = fmt.Sprintf("%s [%s]", name, seededUserID(input.email))
+		}
 		enabled := true
 		if hasEmploymentStatus {
-			enabled = strings.EqualFold(attrs["employment_status"], "active")
+			enabled = strings.EqualFold(input.attrs["employment_status"], "active")
 		}
 		users = append(users, &User{
-			Id:          seededUserID(email),
+			Id:          seededUserID(input.email),
 			Name:        name,
-			Email:       email,
+			Email:       input.email,
 			Enabled:     enabled,
 			AccountType: AccountTypeHuman,
-			Attrs:       attrs,
+			Attrs:       input.attrs,
 			CreatedAt:   time.Now(),
 			UpdatedAt:   time.Now(),
 		})
-	}
-	if len(users) == 0 {
-		return nil, fmt.Errorf("baton-demo: users CSV contains no users")
 	}
 	return users, nil
 }
