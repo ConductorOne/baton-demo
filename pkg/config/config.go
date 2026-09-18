@@ -30,6 +30,9 @@ var (
 		field.WithDefaultValue(10),
 		field.WithInt(func(r *field.IntRuler) { r.Gt(0) }),
 	)
+	UsersCSVField = field.StringField("users-csv",
+		field.WithDescription("Path to a CSV file whose users seed the database. When set, this overrides --users."),
+	)
 
 	// NHI estate fields. These let an operator stand up a realistic
 	// non-human-identity demo estate: service/system accounts (K2), secrets
@@ -84,6 +87,7 @@ var Config = field.NewConfiguration([]field.SchemaField{
 	RoleCountField,
 	ScopedRoleCountField,
 	UserCountField,
+	UsersCSVField,
 	ServiceAccountCountField,
 	SystemAccountCountField,
 	SecretCountField,
