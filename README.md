@@ -30,33 +30,6 @@ baton-demo
 baton resources
 ```
 
-## Browse the live demo application
-
-Run the built-in web viewer against the same database used by your connector:
-
-```sh
-go run ./cmd/baton-demo browse --db-file-name ./baton-demo.db
-```
-
-Open `http://127.0.0.1:8080`. Use `--port` to choose another port, or `--port 0` to
-choose an available port. `BATON_DB_FILE_NAME` also sets the database path.
-
-The viewer shows users, groups, roles, projects, scoped roles, non-human identities,
-agents and credential metadata. Select a record to follow its direct relationships.
-It refreshes every two seconds while visible, so provisioning performed by another
-process appears without running a sync. The observed-changes panel tracks changes
-seen during the current browser session; it is not a durable audit log. Short-lived
-changes between refreshes may not be observed.
-
-The database must already exist. Browsing uses a read-only connection, does not seed
-or migrate it, and never exposes the passwords table. Missing tables in older demo
-databases are identified in the UI. The viewer supports up to 10,000 rows per table
-and reports an error instead of displaying a truncated inventory above that limit.
-It binds only to localhost. Stop with Ctrl-C.
-
-The proposed generic SDK connector browser is specified separately in
-[the SDK browser spec](docs/sdk-connector-browser-spec.md).
-
 ## Seed demo users from a CSV
 
 Pass `--users-csv` with a file that has an `email` column and either `display_name` or `first_name` and `last_name`. `employment_status` is optional; when provided, only `active` users are enabled. Every CSV column is emitted as a user profile attribute, and seeded users keep baton-demo's generated group and role assignments. Duplicate display names are distinguished with the user's email; duplicate emails are rejected. A ready-to-run example is included at `examples/users.csv`.

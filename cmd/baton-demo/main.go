@@ -2,11 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
-	"os/signal"
-	"syscall"
-
-	"github.com/conductorone/baton-demo/pkg/browser"
 
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/exit"
@@ -26,8 +21,7 @@ var version = "dev"
 // You are able to add additional flags and update the configuration in case your connector needs more input from the user
 // in order to run.
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	ctx := context.Background()
 
 	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-demo", getConnector, config.Config)
 	if err != nil {
@@ -36,9 +30,8 @@ func main() {
 	}
 
 	cmd.Version = version
-	cmd.AddCommand(browser.Command())
 
-	err = cmd.ExecuteContext(ctx)
+	err = cmd.Execute()
 	if err != nil {
 		exit.LogExit(err)
 	}
