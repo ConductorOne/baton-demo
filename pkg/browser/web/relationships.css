@@ -1,0 +1,40 @@
+.alias-note {
+  flex-basis: 100%;
+  color: #7b8980;
+  font-size: 10px;
+}
+
+.related-object {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 140px;
+  padding: 4px 0;
+}
+
+.related-object-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.related-object-text strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.related-object-text small {
+  display: block;
+  margin-top: 5px;
+  color: #7b8980;
+  font-size: 11px;
+}
+
+.related-object:hover {
+  text-decoration: none;
+}
+
+.related-object:hover strong {
+  text-decoration: underline;
+}
