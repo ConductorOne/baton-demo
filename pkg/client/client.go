@@ -27,6 +27,12 @@ import (
 	// return a copy of the default dialect, which is not what we want,
 	// and allocates a ton of memory.
 	_ "github.com/doug-martin/goqu/v9/dialect/sqlite3"
+
+	// NOTE: required to register the "sqlite" driver with database/sql.
+	//
+	// If you remove this import, sql.Open("sqlite", ...) will fail with
+	// "sql: unknown driver \"sqlite\" (forgotten import?)".
+	_ "modernc.org/sqlite"
 )
 
 // Resource model
