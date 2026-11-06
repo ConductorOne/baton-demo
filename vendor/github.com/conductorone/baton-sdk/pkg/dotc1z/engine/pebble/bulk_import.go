@@ -189,7 +189,7 @@ func (w *bulkSSTWriter) finish() error {
 // Entitlement identities embed the raw external id and cannot fold. The
 // destination sync must be freshly started (MarkFreshSync via
 // StartNewSync) and empty; nothing else may write to the engine between
-// Start and Finish. Used by C1File.ToPebble for sqlite→pebble conversion.
+// Start and Finish. Used by sqlite.File.ToPebble for v1→Pebble conversion.
 type BulkSyncImport struct {
 	e      *Engine
 	syncID string
@@ -795,7 +795,7 @@ func (b *BulkSyncImport) Finish(ctx context.Context) error {
 		if err := b.e.db.IngestSSTs(ctx, paths); err != nil {
 			return fmt.Errorf("bulk sync import: ingest: %w", err)
 		}
-		b.e.noteEntitlementKeyspaceWrite()
+		b.e.records.noteEntitlementKeyspaceWrite()
 		// The data keyspaces are no longer provably empty: subsequent
 		// Put*Records calls in this sync must take their read-before-write
 		// paths so overwrites of imported identities clean up index entries.
