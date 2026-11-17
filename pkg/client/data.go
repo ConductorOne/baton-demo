@@ -64,6 +64,7 @@ type generator struct {
 	currentNHIApp        int
 	currentAssumableRole int
 	currentAgent         int
+	currentNamedRole     int
 }
 
 type seededUserInput struct {
@@ -554,6 +555,13 @@ func (g *generator) Next() (*dbResource, bool) {
 			},
 		}
 		g.currentAgent++
+		return db, true
+	}
+
+	// Fixed named roles, emitted last so generated resources keep their order.
+	if g.currentNamedRole < len(namedRoles) {
+		db := &dbResource{Role: g.namedRole(g.currentNamedRole)}
+		g.currentNamedRole++
 		return db, true
 	}
 

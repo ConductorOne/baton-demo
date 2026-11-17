@@ -66,6 +66,28 @@ baton-demo --init-db --db-file-name /tmp/baton-demo-seeded.db \
   --users-csv ./examples/users.csv
 ```
 
+## Named roles and duties
+
+Besides the generated `Role 0000000`-style roles, every database contains six fixed
+roles whose `assignment` entitlements declare the duties they allow, for
+separation-of-duties demos:
+
+| Role (ID) | Duties | Precision |
+|---|---|---|
+| Payment Preparer (`role-payment-preparer`) | `payment.prepare` | exact |
+| Payment Approver (`role-payment-approver`) | `payment.authorize` | exact |
+| Payment Releaser (`role-payment-releaser`) | `payment.release` | exact |
+| Finance Administrator (`role-finance-administrator`) | `payment.prepare`, `payment.authorize`, `payment.release`, `vendor.activate` | inclusive |
+| Developer (`role-developer`) | `software_change.author` | exact |
+| Release Manager (`role-release-manager`) | `software_change.approve`, `software_change.merge`, `release.deploy` | inclusive |
+
+The first three users are seeded with conflicting assignments: the first holds Payment
+Preparer and Payment Releaser, the second holds Developer and Release Manager, and the
+third holds Finance Administrator. Users beyond the configured count are skipped. The
+table lives in `pkg/client/named_roles.go`; duty IDs are plain strings and may change
+until ConductorOne's duty catalog names are final. Existing databases gain these roles
+when re-initialized with `--init-db`.
+
 # 
 
 # Contributing, Support and Issues

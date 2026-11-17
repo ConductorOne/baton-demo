@@ -326,6 +326,8 @@ github.com/conductorone/baton-sdk/pkg/dotc1z/engine/pebble
 github.com/conductorone/baton-sdk/pkg/dotc1z/engine/pebble/codec
 github.com/conductorone/baton-sdk/pkg/dotc1z/engine/pebble/internal/rawdb
 github.com/conductorone/baton-sdk/pkg/dotc1z/format/v3
+github.com/conductorone/baton-sdk/pkg/duty
+github.com/conductorone/baton-sdk/pkg/duty/dutytest
 github.com/conductorone/baton-sdk/pkg/exit
 github.com/conductorone/baton-sdk/pkg/field
 github.com/conductorone/baton-sdk/pkg/healthcheck
