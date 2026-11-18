@@ -174,3 +174,42 @@ func TestGeneratorReturnsSeededUsers(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratorNamedRolesWithFewUsers(t *testing.T) {
+	t.Parallel()
+	for _, users := range []int{0, 1, 2, 3, 10} {
+		generator := generator{config: &config.Demo{Users: users, Roles: 2}}
+		named := map[string]*Role{}
+		generated := []string{}
+		for {
+			resource, ok := generator.Next()
+			if !ok {
+				break
+			}
+			if resource == nil || resource.Role == nil {
+				continue
+			}
+			if _, ok := NamedRoleByID(resource.Role.Id); ok {
+				named[resource.Role.Id] = resource.Role
+			} else {
+				generated = append(generated, resource.Role.Id)
+			}
+		}
+		if got, want := generated, []string{"role-0000000", "role-0000001"}; strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("users=%d: generated roles = %v, want %v", users, got, want)
+		}
+		if got, want := len(named), len(NamedRoles()); got != want {
+			t.Fatalf("users=%d: %d named roles, want %d", users, got, want)
+		}
+		for _, role := range named {
+			for _, userID := range role.DirectAssignments {
+				if userID >= userId(users) {
+					t.Fatalf("users=%d: role %s assigned to nonexistent user %s", users, role.Id, userID)
+				}
+			}
+		}
+		if users >= 3 && strings.Join(named["role-finance-administrator"].DirectAssignments, ",") != userId(2) {
+			t.Fatalf("users=%d: finance administrator holders = %v", users, named["role-finance-administrator"].DirectAssignments)
+		}
+	}
+}

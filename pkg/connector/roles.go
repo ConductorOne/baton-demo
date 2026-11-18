@@ -10,6 +10,7 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/duty"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	sdkEntitlement "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	sdkGrant "github.com/conductorone/baton-sdk/pkg/types/grant"
@@ -88,7 +89,14 @@ func (o *roleBuilder) Get(ctx context.Context, resourceId *v2.ResourceId, parent
 // Entitlements returns an assignment entitlement.
 func (o *roleBuilder) Entitlements(_ context.Context, resource *v2.Resource, ops resource.SyncOpAttrs) ([]*v2.Entitlement, *resource.SyncOpResults, error) {
 	// This entitlement represents a User or Group being assigned the role
-	assignment := sdkEntitlement.NewAssignmentEntitlement(resource, roleAssignmentEntitlement, sdkEntitlement.WithGrantableTo(userResourceType, groupResourceType))
+	// Named roles declare the duties they allow; generated roles have none, so
+	// WithDuties receives no mappings and attaches nothing.
+	assignment := sdkEntitlement.NewAssignmentEntitlement(
+		resource,
+		roleAssignmentEntitlement,
+		sdkEntitlement.WithGrantableTo(userResourceType, groupResourceType),
+		sdkEntitlement.WithDuties(roleDutyMappings(resource.GetId().GetResource())...),
+	)
 	assignment.Description = fmt.Sprintf("Is assigned the %s role", resource.DisplayName)
 
 	return []*v2.Entitlement{assignment}, nil, nil
@@ -220,6 +228,24 @@ func (o *roleBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown resource type")
 	}
+}
+
+// roleDutyMappings returns the duty mappings for a named role, or nil for any
+// other role. The duties themselves are defined in client.NamedRoles.
+func roleDutyMappings(roleID string) []*v2.DutyMapping {
+	nr, ok := client.NamedRoleByID(roleID)
+	if !ok {
+		return nil
+	}
+	mappings := make([]*v2.DutyMapping, 0, len(nr.Duties))
+	for _, id := range nr.Duties {
+		if nr.Precision == client.DutyPrecisionInclusive {
+			mappings = append(mappings, duty.Inclusive(id))
+		} else {
+			mappings = append(mappings, duty.Exact(id))
+		}
+	}
+	return mappings
 }
 
 func newRoleBuilder(client *client.Client) *roleBuilder {
